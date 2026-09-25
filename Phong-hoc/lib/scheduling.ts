@@ -7,7 +7,7 @@ export type RoomInfo = {
   name: string
   capacity: number
   building?: string
-  campus?: "36 Xuân La" | "371 Nguyễn Hoàng Tôn"
+  campus?: "36 Xuân La" | "371 Nguyễn Hoàng Tôn" | "77 NCT"
   kind?: "classroom" | "hall"
 }
 
@@ -95,6 +95,7 @@ export const CAMPUS_LABELS = {
   all: "Tất cả cơ sở",
   "36 Xuân La": "Cơ sở 36 Xuân La",
   "371 Nguyễn Hoàng Tôn": "Cơ sở 371 Nguyễn Hoàng Tôn",
+  "77 NCT": "Cơ sở 3 - 77 NCT",
 } as const
 
 export type CampusFilter = keyof typeof CAMPUS_LABELS
@@ -300,61 +301,85 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
   const unassigned: Unassigned[] = []
 
   for (const cls of sorted) {
-    const shiftPeriods = SHIFT_PERIODS[cls.shift]
-    const startPeriod = cls.startPeriod ?? shiftPeriods[0]
-    const endPeriod = cls.endPeriod ?? startPeriod + cls.periods - 1
-    if (
-      cls.periods > shiftPeriods.length ||
-      startPeriod < shiftPeriods[0] ||
-      endPeriod > shiftPeriods[shiftPeriods.length - 1] ||
-      endPeriod - startPeriod + 1 !== cls.periods
-    ) {
+    const eligibleRooms = roomsByCapAsc.filter((room) => cls.size >= 150 || !isHallRoom(room))
+
+    const placementCandidates: Array<{
+      candidateRoom: RoomInfo
+      day: number
+      shift: Shift
+      startPeriod: number
+      endPeriod: number
+      shortage: number
+      preference: number
+    }> = []
+
+    for (const day of DAYS) {
+      for (const shift of SHIFTS) {
+        const shiftPeriods = SHIFT_PERIODS[shift]
+        if (cls.periods > shiftPeriods.length) continue
+
+        for (const room of eligibleRooms) {
+          const key = occKey(day, room.id)
+          const used = occupancy.get(key) ?? new Set<number>()
+          const start = findFreeBlock(used, shiftPeriods, cls.periods)
+          if (start === null) continue
+
+          const sameOriginalSlot = day === cls.day && shift === cls.shift
+          const preference = sameOriginalSlot ? 0 : 1
+          const shortage = Math.max(0, cls.size - room.capacity)
+
+          placementCandidates.push({
+            candidateRoom: room,
+            day,
+            shift,
+            startPeriod: start,
+            endPeriod: start + cls.periods - 1,
+            shortage,
+            preference,
+          })
+        }
+      }
+    }
+
+    const chosen = placementCandidates.sort((a, b) => {
+      if (a.preference !== b.preference) return a.preference - b.preference
+      if (a.shortage !== b.shortage) return a.shortage - b.shortage
+      if (a.candidateRoom.capacity !== b.candidateRoom.capacity) return a.candidateRoom.capacity - b.candidateRoom.capacity
+      return a.day - b.day
+    })[0]
+
+    if (!chosen) {
       unassigned.push({
         classInfo: cls,
-        reason: `Khung tiết ${startPeriod}-${endPeriod} không hợp lệ trong ca ${SHIFT_LABELS[cls.shift]}.`,
+        reason: `Không tìm thấy khung giờ/phòng phù hợp cho ${cls.name}. Hệ thống đã chấp nhận phòng chật hơn nhưng toàn bộ lịch vẫn đã đầy.`,
       })
       continue
     }
 
-    const eligibleRooms = roomsByCapAsc.filter((room) => cls.size >= 150 || !isHallRoom(room))
-    const fitRooms = eligibleRooms.filter((room) => room.capacity >= cls.size)
-    const undersizedRooms = eligibleRooms
-      .filter((room) => room.capacity < cls.size)
-      .sort((a, b) => b.capacity - a.capacity)
-    const candidates = [...fitRooms, ...undersizedRooms]
-    let placed = false
-    for (const room of candidates) {
-      const key = occKey(cls.day, room.id)
-      const used = occupancy.get(key) ?? new Set<number>()
-      const start = cls.startPeriod ?? findFreeBlock(used, shiftPeriods, cls.periods)
-      const end = cls.endPeriod ?? (start === null ? null : start + cls.periods - 1)
-      if (start !== null && end !== null && [...Array(end - start + 1)].every((_, index) => !used.has(start + index))) {
-        for (let p = start; p <= end; p++) used.add(p)
-        occupancy.set(key, used)
-        assignments.push({
-          classId: cls.id,
-          roomId: room.id,
-          day: cls.day,
-          shift: cls.shift,
-          startPeriod: start,
-          endPeriod: end,
-          shortage: Math.max(0, cls.size - room.capacity) || undefined,
-        })
-        placed = true
-        break
-      }
-    }
+    const key = occKey(chosen.day, chosen.candidateRoom.id)
+    const used = occupancy.get(key) ?? new Set<number>()
+    for (let p = chosen.startPeriod; p <= chosen.endPeriod; p++) used.add(p)
+    occupancy.set(key, used)
 
-    if (!placed) {
-      unassigned.push({
-        classInfo: cls,
-        reason: fitRooms.length === 0
-          ? `Không còn phòng phù hợp trong ${SHIFT_LABELS[cls.shift]} ${DAY_LABELS[cls.day]} — đã hết cả phòng dự phòng.`
-          : `Hết phòng trống ${SHIFT_LABELS[cls.shift]} ${DAY_LABELS[cls.day]} theo đúng khung tiết TKB.`,
-      })
-    }
+    assignments.push({
+      classId: cls.id,
+      roomId: chosen.candidateRoom.id,
+      day: chosen.day,
+      shift: chosen.shift,
+      startPeriod: chosen.startPeriod,
+      endPeriod: chosen.endPeriod,
+      shortage: chosen.shortage || undefined,
+    })
   }
 
+  return buildScheduleResult(assignments, unassigned, rooms)
+}
+
+function buildScheduleResult(
+  assignments: Assignment[],
+  unassigned: Unassigned[],
+  rooms: RoomInfo[],
+): ScheduleResult {
   const reserveBySlot: Record<string, number> = {}
   const reserveWarnings: string[] = []
   for (const day of DAYS) {
@@ -371,6 +396,67 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
   }
 
   return { assignments, unassigned, reserveBySlot, reserveWarnings }
+}
+
+/** Tìm một slot mới cho lớp phát sinh mà không thay đổi các assignment đã có. */
+export function findIncrementalAssignment(
+  cls: ClassInfo,
+  rooms: RoomInfo[],
+  assignments: Assignment[],
+): Assignment | null {
+  const alternatives = findAlternatives(cls, rooms, assignments, Number.MAX_SAFE_INTEGER)
+  const roomById = new Map(rooms.map((room) => [room.id, room]))
+  const selected = alternatives.sort((left, right) => {
+    const leftOriginal = left.day === cls.day && left.shift === cls.shift ? 0 : 1
+    const rightOriginal = right.day === cls.day && right.shift === cls.shift ? 0 : 1
+    if (leftOriginal !== rightOriginal) return leftOriginal - rightOriginal
+    const leftRoom = roomById.get(left.roomId)
+    const rightRoom = roomById.get(right.roomId)
+    const leftShortage = Math.max(0, cls.size - (leftRoom?.capacity ?? 0))
+    const rightShortage = Math.max(0, cls.size - (rightRoom?.capacity ?? 0))
+    if (leftShortage !== rightShortage) return leftShortage - rightShortage
+    return (leftRoom?.capacity ?? 0) - (rightRoom?.capacity ?? 0)
+  })[0]
+
+  if (!selected) return null
+  const room = roomById.get(selected.roomId)
+  return {
+    ...selected,
+    shortage: Math.max(0, cls.size - (room?.capacity ?? 0)) || undefined,
+  }
+}
+
+/** Thêm một lớp vào lịch đã chốt, chỉ sử dụng tài nguyên còn trống. */
+export function addClassIncrementally(
+  cls: ClassInfo,
+  rooms: RoomInfo[],
+  current: ScheduleResult,
+): ScheduleResult {
+  const assignment = findIncrementalAssignment(cls, rooms, current.assignments)
+  if (!assignment) {
+    return buildScheduleResult(current.assignments, [
+      ...current.unassigned,
+      {
+        classInfo: cls,
+        reason: `Không còn phòng/khung giờ trống để xếp lớp ${cls.name}. Các lớp đã phân trước đó được giữ nguyên.`,
+      },
+    ], rooms)
+  }
+
+  return buildScheduleResult([...current.assignments, assignment], current.unassigned, rooms)
+}
+
+/** Gỡ một lớp khỏi lịch đã chốt mà không đụng tới các assignment còn lại. */
+export function removeClassFromSchedule(
+  classId: string,
+  rooms: RoomInfo[],
+  current: ScheduleResult,
+): ScheduleResult {
+  return buildScheduleResult(
+    current.assignments.filter((assignment) => assignment.classId !== classId),
+    current.unassigned.filter((item) => item.classInfo.id !== classId),
+    rooms,
+  )
 }
 
 /** Dựng lại bản đồ occupancy từ danh sách assignment hiện có. */
@@ -393,26 +479,28 @@ export function findAlternatives(
   limit = 6,
 ): AltSlot[] {
   const occupancy = buildOccupancy(assignments)
-  const fitRooms = [...rooms]
-    .filter((room) => room.capacity >= cls.size && (cls.size >= 150 || !isHallRoom(room)))
-    .sort((a, b) => a.capacity - b.capacity)
+  const candidateRooms = [...rooms]
+    .filter((room) => cls.size >= 150 || !isHallRoom(room))
+    .sort((a, b) => {
+      const shortageA = Math.max(0, cls.size - a.capacity)
+      const shortageB = Math.max(0, cls.size - b.capacity)
+      if (shortageA !== shortageB) return shortageA - shortageB
+      return a.capacity - b.capacity
+    })
+
   const results: AltSlot[] = []
 
   for (const day of DAYS) {
     for (const shift of SHIFTS) {
       const shiftPeriods = SHIFT_PERIODS[shift]
       if (cls.periods > shiftPeriods.length) continue
-      for (const room of fitRooms) {
+
+      for (const room of candidateRooms) {
         const used = occupancy.get(occKey(day, room.id)) ?? new Set<number>()
-        const isOriginalSlot = day === cls.day && shift === cls.shift
-        const fixedStart = isOriginalSlot ? cls.startPeriod : undefined
-        const start = fixedStart ?? findFreeBlock(used, shiftPeriods, cls.periods)
-        const end = isOriginalSlot
-          ? cls.endPeriod ?? (start === null ? null : start + cls.periods - 1)
-          : start === null
-            ? null
-            : start + cls.periods - 1
-        if (start !== null && end !== null && [...Array(end - start + 1)].every((_, index) => !used.has(start + index))) {
+        const start = findFreeBlock(used, shiftPeriods, cls.periods)
+        if (start === null) continue
+        const end = start + cls.periods - 1
+        if ([...Array(end - start + 1)].every((_, index) => !used.has(start + index))) {
           results.push({ day, shift, roomId: room.id, startPeriod: start, endPeriod: end })
         }
         if (results.length >= limit) return results

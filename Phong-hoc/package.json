@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --port 3000",
     "build": "next build",
-    "start": "next start --port 3000"
+    "start": "next start --port 3000",
+    "sync:data": "node scripts/sync-real-data.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

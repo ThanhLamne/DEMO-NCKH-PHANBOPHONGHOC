@@ -26,10 +26,12 @@ import {
   type RoomInfo,
 } from "@/lib/scheduling"
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data"
+import { ALLOCATION_UPDATED_EVENT, loadAllocationSnapshot, type AllocationSnapshot } from "@/lib/allocation-store"
+import { addBorrowRequest } from "@/lib/borrow-store"
 
 type RoomStatus = "available" | "in-class" | "booked"
 
-type ClassBlock = { start: string; end: string; name: string }
+type ClassBlock = { day: number; start: string; end: string; name: string }
 
 type RoomBase = {
   id: string
@@ -65,9 +67,18 @@ const WEEKDAY_LABELS = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "T
  * Trạng thái phòng (trống / đang có lớp) được tính theo GIỜ THỰC hiện tại
  * so với các khối giờ này.
  */
-function createRoomSchedules(cohort: CohortFilter): RoomBase[] {
-  const classes = cohort === "all" ? SHEET_CLASSES : SHEET_CLASSES.filter((item) => item.cohort === cohort)
-  const result = autoSchedule(classes, SHEET_ROOMS)
+function createRoomSchedules(cohort: CohortFilter, snapshot: AllocationSnapshot | null): RoomBase[] {
+  const classes = snapshot
+    ? snapshot.classes.filter((item) => cohort === "all" || item.cohort === cohort)
+    : cohort === "all"
+      ? SHEET_CLASSES
+      : SHEET_CLASSES.filter((item) => item.cohort === cohort)
+  const result = snapshot
+    ? {
+        ...snapshot.result,
+        assignments: snapshot.result.assignments.filter((assignment) => classes.some((item) => item.id === assignment.classId)),
+      }
+    : autoSchedule(classes, SHEET_ROOMS)
   const classById = new Map(classes.map((item) => [item.id, item]))
   const roomById = new Map(SHEET_ROOMS.map((item) => [item.id, item]))
   const blocksByRoom = new Map<string, ClassBlock[]>()
@@ -77,6 +88,7 @@ function createRoomSchedules(cohort: CohortFilter): RoomBase[] {
     if (!cls) continue
     const blocks = blocksByRoom.get(assignment.roomId) ?? []
     blocks.push({
+      day: assignment.day,
       start: rangeTime(assignment.startPeriod, assignment.startPeriod).split(" - ")[0],
       end: rangeTime(assignment.startPeriod, assignment.endPeriod).split(" - ")[1],
       name: cls.name,
@@ -105,6 +117,18 @@ function addMinutes(hhmm: string, minutes: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
 }
 
+function periodAtMinutes(value: number): number {
+  if (value < 13 * 60) return Math.min(5, Math.max(1, 1 + Math.floor((value - 7 * 60) / 50)))
+  if (value < 18 * 60) return Math.min(10, Math.max(6, 6 + Math.floor((value - 13 * 60) / 50)))
+  return Math.min(13, Math.max(11, 11 + Math.floor((value - 18 * 60) / 50)))
+}
+
+function shiftAtPeriod(period: number): "morning" | "afternoon" | "evening" {
+  if (period <= 5) return "morning"
+  if (period <= 10) return "afternoon"
+  return "evening"
+}
+
 function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60)
   const m = minutes % 60
@@ -118,7 +142,7 @@ function pad(n: number): string {
 }
 
 /** Tính trạng thái phòng theo giờ thực (số phút trong ngày) + lượt mượn tạm. */
-function computeRoomView(base: RoomBase, nowMin: number, booking?: Booking): RoomView {
+function computeRoomView(base: RoomBase, nowMin: number, nowDay: number, booking?: Booking): RoomView {
   // Lượt mượn tạm còn hiệu lực -> ưu tiên hiển thị "đang mượn".
   if (booking && nowMin < toMinutes(booking.until)) {
     return {
@@ -129,11 +153,11 @@ function computeRoomView(base: RoomBase, nowMin: number, booking?: Booking): Roo
       status: "booked",
       borrower: booking.borrower,
       bookedUntil: booking.until,
-      nextClass: nextClassAfter(base, nowMin),
+      nextClass: nextClassAfter(base, nowMin, nowDay),
     }
   }
 
-  const current = base.blocks.find((b) => nowMin >= toMinutes(b.start) && nowMin < toMinutes(b.end))
+  const current = base.blocks.find((b) => b.day === nowDay && nowMin >= toMinutes(b.start) && nowMin < toMinutes(b.end))
   if (current) {
     return {
       id: base.id,
@@ -143,7 +167,7 @@ function computeRoomView(base: RoomBase, nowMin: number, booking?: Booking): Roo
       status: "in-class",
       className: current.name,
       classEnd: current.end,
-      nextClass: nextClassAfter(base, nowMin),
+      nextClass: nextClassAfter(base, nowMin, nowDay),
     }
   }
 
@@ -153,13 +177,13 @@ function computeRoomView(base: RoomBase, nowMin: number, booking?: Booking): Roo
     building: base.building,
     campus: base.campus,
     status: "available",
-    nextClass: nextClassAfter(base, nowMin),
+    nextClass: nextClassAfter(base, nowMin, nowDay),
   }
 }
 
-function nextClassAfter(base: RoomBase, nowMin: number): string | null {
+function nextClassAfter(base: RoomBase, nowMin: number, nowDay: number): string | null {
   const upcoming = base.blocks
-    .filter((b) => toMinutes(b.start) > nowMin)
+    .filter((b) => b.day === nowDay && toMinutes(b.start) > nowMin)
     .sort((a, b) => toMinutes(a.start) - toMinutes(b.start))
   return upcoming[0]?.start ?? null
 }
@@ -168,7 +192,7 @@ type Filter = "all" | "available" | "in-class" | "booked"
 type BuildingFilter = "all" | string
 
 function campusOrder(campus?: RoomInfo["campus"]): number {
-  return campus === "36 Xuân La" ? 0 : campus === "371 Nguyễn Hoàng Tôn" ? 1 : 2
+  return campus === "36 Xuân La" ? 0 : campus === "371 Nguyễn Hoàng Tôn" ? 1 : campus === "77 NCT" ? 2 : 3
 }
 
 function buildingOrder(building?: string): string {
@@ -188,7 +212,8 @@ function roomOrder(a: RoomView, b: RoomView): number {
 
 export function RoomLookup() {
   const [cohort, setCohort] = useState<CohortFilter>("all")
-  const schedules = useMemo(() => createRoomSchedules(cohort), [cohort])
+  const [allocationSnapshot, setAllocationSnapshot] = useState<AllocationSnapshot | null>(null)
+  const schedules = useMemo(() => createRoomSchedules(cohort, allocationSnapshot), [cohort, allocationSnapshot])
   const [now, setNow] = useState<Date | null>(null)
   const [bookings, setBookings] = useState<Record<string, Booking>>({})
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null)
@@ -198,6 +223,13 @@ export function RoomLookup() {
 
   // Đồng hồ thời gian thực: cập nhật mỗi giây.
   useEffect(() => {
+    const refreshAllocation = () => setAllocationSnapshot(loadAllocationSnapshot())
+    refreshAllocation()
+    window.addEventListener(ALLOCATION_UPDATED_EVENT, refreshAllocation)
+    return () => window.removeEventListener(ALLOCATION_UPDATED_EVENT, refreshAllocation)
+  }, [])
+
+  useEffect(() => {
     setNow(new Date())
     const id = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(id)
@@ -205,9 +237,11 @@ export function RoomLookup() {
 
   const nowMin = now ? now.getHours() * 60 + now.getMinutes() : 0
 
+  const nowDay = now?.getDay() === 0 ? 7 : now?.getDay() ?? 2
+
   const views = useMemo(
-    () => schedules.map((r) => computeRoomView(r, nowMin, bookings[r.id])),
-    [schedules, nowMin, bookings],
+    () => schedules.map((r) => computeRoomView(r, nowMin, nowDay, bookings[r.id])),
+    [schedules, nowMin, nowDay, bookings],
   )
 
   const stats = useMemo(
@@ -239,6 +273,7 @@ export function RoomLookup() {
       [
         { campus: "36 Xuân La" as const, label: "Cơ sở 36 Xuân La" },
         { campus: "371 Nguyễn Hoàng Tôn" as const, label: "Cơ sở 371 Nguyễn Hoàng Tôn" },
+        { campus: "77 NCT" as const, label: "Cơ sở 3 - 77 NCT" },
       ].map((group) => ({
         ...group,
         buildings: [...new Set(
@@ -268,13 +303,21 @@ export function RoomLookup() {
     })
   }
 
-  function handleConfirmBooking(id: string, minutes: number) {
+  function handleConfirmBooking(id: string, minutes: number, requester: string, requesterType: "Giảng viên" | "Sinh viên", purpose: string, size: number) {
     if (!now) return
     const nowHM = `${pad(now.getHours())}:${pad(now.getMinutes())}`
-    setBookings((prev) => ({
-      ...prev,
-      [id]: { until: addMinutes(nowHM, minutes), borrower: "Bạn (Giảng viên / SV)" },
-    }))
+    const startPeriod = periodAtMinutes(now.getHours() * 60 + now.getMinutes())
+    const endPeriod = Math.min(startPeriod + Math.max(1, Math.ceil(minutes / 50)) - 1, shiftAtPeriod(startPeriod) === "morning" ? 5 : shiftAtPeriod(startPeriod) === "afternoon" ? 10 : 13)
+    addBorrowRequest({
+      requester: requester.trim() || "Người đăng ký chưa nhập tên",
+      requesterType,
+      purpose: purpose.trim() || `Đăng ký mượn phòng ${id}`,
+      day: nowDay,
+      shift: shiftAtPeriod(startPeriod),
+      startPeriod,
+      endPeriod,
+      size,
+    })
     setActiveRoomId(null)
   }
 
@@ -755,12 +798,16 @@ function BookingModal({
   now: string
   buffer: number
   onClose: () => void
-  onConfirm: (id: string, minutes: number) => void
+  onConfirm: (id: string, minutes: number, requester: string, requesterType: "Giảng viên" | "Sinh viên", purpose: string, size: number) => void
 }) {
   const nextClass = room.nextClass ?? END_OF_DAY
   const gapMinutes = toMinutes(nextClass) - toMinutes(now)
   const usableMinutes = gapMinutes - buffer
   const [selected, setSelected] = useState<number | null>(null)
+  const [requester, setRequester] = useState("")
+  const [requesterType, setRequesterType] = useState<"Giảng viên" | "Sinh viên">("Giảng viên")
+  const [purpose, setPurpose] = useState("")
+  const [size, setSize] = useState(String(Math.min(room.capacity, 30)))
 
   return (
     <div
@@ -817,6 +864,30 @@ function BookingModal({
           </div>
 
           <div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-foreground">
+                Họ tên người đăng ký
+                <input value={requester} onChange={(event) => setRequester(event.target.value)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal" placeholder="Nhập họ tên" />
+              </label>
+              <label className="text-sm font-semibold text-foreground">
+                Đối tượng
+                <select value={requesterType} onChange={(event) => setRequesterType(event.target.value as "Giảng viên" | "Sinh viên")} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal">
+                  <option>Giảng viên</option>
+                  <option>Sinh viên</option>
+                </select>
+              </label>
+            </div>
+            <label className="mt-3 block text-sm font-semibold text-foreground">
+              Mục đích mượn phòng
+              <input value={purpose} onChange={(event) => setPurpose(event.target.value)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal" placeholder="Ví dụ: học bù, họp nhóm, sinh hoạt CLB" />
+            </label>
+            <label className="mt-3 block text-sm font-semibold text-foreground">
+              Số người
+              <input type="number" min="1" max={room.capacity} value={size} onChange={(event) => setSize(event.target.value)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm font-normal" />
+            </label>
+          </div>
+
+          <div>
             <p className="mb-2 text-sm font-semibold text-foreground">Chọn thời gian mượn (tính từ hiện tại)</p>
             <div className="grid grid-cols-2 gap-2.5">
               {DURATION_OPTIONS.map((minutes) => {
@@ -855,7 +926,7 @@ function BookingModal({
           <button
             type="button"
             disabled={selected === null}
-            onClick={() => selected !== null && onConfirm(room.id, selected)}
+            onClick={() => selected !== null && onConfirm(room.id, selected, requester, requesterType, purpose, Math.min(room.capacity, Math.max(1, Number(size) || 1)))}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition-colors hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
           >
             <CheckCircle2 className="size-5" />

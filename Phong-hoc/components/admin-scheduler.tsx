@@ -41,8 +41,11 @@ import {
   rangeTime,
   CAMPUS_LABELS,
   COHORT_LABELS,
+  addClassIncrementally,
+  removeClassFromSchedule,
 } from "@/lib/scheduling"
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data"
+import { clearAllocationSnapshot, loadAllocationSnapshot, saveAllocationSnapshot } from "@/lib/allocation-store"
 
 const ROOMS = SHEET_ROOMS
 
@@ -82,6 +85,11 @@ const CAMPUS_SCHEDULE_GROUPS = [
     label: "Cơ sở 371 Nguyễn Hoàng Tôn",
     tone: "border-violet-200 bg-violet-50/70 text-violet-800",
   },
+  {
+    campus: "77 NCT" as const,
+    label: "Cơ sở 3 - 77 NCT",
+    tone: "border-emerald-200 bg-emerald-50/70 text-emerald-800",
+  },
 ]
 
 export function AdminScheduler() {
@@ -106,6 +114,18 @@ export function AdminScheduler() {
     return () => document.removeEventListener("mousedown", clearHighlight)
   }, [])
 
+  useEffect(() => {
+    const snapshot = loadAllocationSnapshot()
+    if (!snapshot) return
+    setClasses(snapshot.classes)
+    setResult(snapshot.result)
+    setNewClassIds(snapshot.classes.filter((item) => !SHEET_CLASSES.some((base) => base.id === item.id)).map((item) => item.id))
+  }, [])
+
+  useEffect(() => {
+    if (result) saveAllocationSnapshot({ classes, result })
+  }, [classes, result])
+
   const roomById = useMemo(() => {
     const map = new Map(ROOMS.map((r) => [r.id, r]))
     return map
@@ -114,6 +134,7 @@ export function AdminScheduler() {
   const classById = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes])
 
   function handleSchedule() {
+    if (result) return
     setResult(autoSchedule(classes, ROOMS))
   }
 
@@ -130,14 +151,14 @@ export function AdminScheduler() {
     const newClass = { ...cls, id: newClassId }
     const nextClasses = [...classes, newClass]
     setClasses(nextClasses)
-    setResult(autoSchedule(nextClasses, ROOMS))
+    setResult(result ? addClassIncrementally(newClass, ROOMS, result) : autoSchedule(nextClasses, ROOMS))
     setNewClassIds((prev) => [...prev, newClass.id])
     return null
   }
 
   function handleRemoveClass(id: string) {
     setClasses((prev) => prev.filter((c) => c.id !== id))
-    setResult(null)
+    setResult((prev) => (prev ? removeClassFromSchedule(id, ROOMS, prev) : prev))
     setEditingClassId(null)
     setNewClassIds((prev) => prev.filter((classId) => classId !== id))
   }
@@ -145,6 +166,7 @@ export function AdminScheduler() {
   function handleResetData() {
     setClasses(SHEET_CLASSES)
     setResult(null)
+    clearAllocationSnapshot()
     setEditingClassId(null)
     setNewClassIds([])
   }
@@ -245,7 +267,7 @@ export function AdminScheduler() {
         if (selectedCohort !== "all" && cls.cohort !== selectedCohort) return false
         if (selectedCampus !== "all" && room.campus !== selectedCampus) return false
         if (selectedBuilding !== "all" && room.building !== selectedBuilding) return false
-        return [cls.name, cls.className, cls.courseCode, room.name]
+        return [cls.name, cls.className, cls.courseCode, cls.cohort, cls.section, room.name]
           .filter(Boolean)
           .some((value) => value?.toLocaleLowerCase().includes(query))
       })
@@ -257,6 +279,7 @@ export function AdminScheduler() {
       [
         { campus: "36 Xuân La" as const, label: "Cơ sở 36 Xuân La" },
         { campus: "371 Nguyễn Hoàng Tôn" as const, label: "Cơ sở 371 Nguyễn Hoàng Tôn" },
+        { campus: "77 NCT" as const, label: "Cơ sở 3 - 77 NCT" },
       ].map((group) => ({
         ...group,
         buildings: [...new Set(
@@ -505,7 +528,6 @@ export function AdminScheduler() {
           <NewClassesPanel
             classes={newClassIds.map((id) => classById.get(id)).filter((item): item is ClassInfo => Boolean(item))}
             result={result}
-            onSchedule={handleSchedule}
             onShowAssignment={showAssignment}
           />
           {/* Bộ chọn thứ trong tuần */}
@@ -935,12 +957,10 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
 function NewClassesPanel({
   classes,
   result,
-  onSchedule,
   onShowAssignment,
 }: {
   classes: ClassInfo[]
   result: ScheduleResult
-  onSchedule: () => void
   onShowAssignment: (assignment: import("@/lib/scheduling").Assignment) => void
 }) {
   if (classes.length === 0) return null
@@ -959,14 +979,6 @@ function NewClassesPanel({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onSchedule}
-          className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Wand2 className="size-4" />
-          Xếp phòng tự động
-        </button>
       </div>
       <ul className="mt-4 grid gap-2 md:grid-cols-2">
         {classes.map((classInfo) => {

@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ArrowRight, Building2, GraduationCap, ShieldCheck } from "lucide-react"
+import { ArrowRight, BookOpen, Building2, GraduationCap, ShieldCheck } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 
 export default function Page() {
@@ -24,7 +24,7 @@ export default function Page() {
           </p>
         </header>
 
-        <main className="grid gap-4 md:grid-cols-2">
+        <main className="grid gap-4 md:grid-cols-3">
           <RoleCard
             href="/student"
             icon={<GraduationCap className="size-6" />}
@@ -38,6 +38,13 @@ export default function Page() {
             title="Cổng quản trị"
             description="Thêm lớp học, tự động phân bổ phòng và theo dõi thời khóa biểu."
             action="Mở quản trị"
+          />
+          <RoleCard
+            href="/lecturer"
+            icon={<BookOpen className="size-6" />}
+            title="Cổng giảng viên"
+            description="Tra cứu phòng trống và gửi yêu cầu mượn phòng để quản trị viên phê duyệt."
+            action="Mở cổng giảng viên"
           />
         </main>
       </div>
