@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ClipboardList,
   DoorOpen,
+  FileWarning,
   Grid2x2,
   History,
   Home,
@@ -21,9 +22,17 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle"
 import { BorrowHistoryPanel } from "@/components/borrow-history-panel"
 import { BorrowRoomPanel } from "@/components/borrow-room-panel"
+import { EquipmentExplorer } from "@/components/equipment-explorer"
+import { LecturerIncidentPanel } from "@/components/lecturer-incident-panel"
 import { RoomManagementPanel } from "@/components/room-management-panel"
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data"
 import { autoSchedule } from "@/lib/scheduling"
+import { INCIDENTS_UPDATED_EVENT, loadIncidents } from "@/lib/incident-store"
+import {
+  BORROW_REQUESTS_UPDATED_EVENT,
+  loadBorrowRequests,
+  type BorrowRequest,
+} from "@/lib/borrow-store"
 
 type AdminPanel = "home" | "scheduler" | "rooms" | "equipment" | "borrow" | "stats" | "settings"
 
@@ -37,14 +46,40 @@ export function PortalShell({
   const isAdmin = role === "admin"
   const isLecturer = role === "lecturer"
   const [activePanel, setActivePanel] = useState<AdminPanel>("home")
-  const [activeTab, setActiveTab] = useState<"register" | "history">("register")
+  const [activeTab, setActiveTab] = useState<"register" | "history" | "incidents">("register")
   const [now, setNow] = useState<Date | null>(null)
+  const [borrowRequests, setBorrowRequests] = useState<BorrowRequest[]>([])
+  const [openIncidentCount, setOpenIncidentCount] = useState(0)
 
   useEffect(() => {
     if (!isAdmin) return
     setNow(new Date())
     const intervalId = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(intervalId)
+  }, [isAdmin])
+
+  useEffect(() => {
+    if (!isLecturer) return
+    const refreshIncidents = () => setOpenIncidentCount(loadIncidents().filter((incident) => incident.status !== "resolved").length)
+    refreshIncidents()
+    window.addEventListener(INCIDENTS_UPDATED_EVENT, refreshIncidents)
+    window.addEventListener("storage", refreshIncidents)
+    return () => {
+      window.removeEventListener(INCIDENTS_UPDATED_EVENT, refreshIncidents)
+      window.removeEventListener("storage", refreshIncidents)
+    }
+  }, [isLecturer])
+
+  useEffect(() => {
+    if (!isAdmin) return
+    const refreshBorrowRequests = () => setBorrowRequests(loadBorrowRequests())
+    refreshBorrowRequests()
+    window.addEventListener(BORROW_REQUESTS_UPDATED_EVENT, refreshBorrowRequests)
+    window.addEventListener("storage", refreshBorrowRequests)
+    return () => {
+      window.removeEventListener(BORROW_REQUESTS_UPDATED_EVENT, refreshBorrowRequests)
+      window.removeEventListener("storage", refreshBorrowRequests)
+    }
   }, [isAdmin])
 
   const liveSchedule = useMemo(() => autoSchedule(SHEET_CLASSES, SHEET_ROOMS), [])
@@ -123,12 +158,15 @@ export function PortalShell({
       },
     ] as const
 
-    const notifications = [
-      { text: "Đã có lịch phân bổ phòng học kỳ I năm 2026", time: "2 giờ trước", type: "dot-blue" },
-      { text: "Yêu cầu mượn phòng số 12 đã được duyệt", time: "4 giờ trước", type: "dot-green" },
-      { text: "Cập nhật danh sách phòng học mới", time: "1 ngày trước", type: "dot-orange" },
-      { text: "Báo trì thiết bị phòng học trừ 25/09", time: "1 ngày trước", type: "dot-slate" },
-    ]
+    const notifications = borrowRequests
+      .filter((request) => request.status === "pending")
+      .slice(-4)
+      .reverse()
+      .map((request) => ({
+        text: `${request.requester} (${request.requesterType}) gửi phiếu mượn${request.courseName ? ` môn ${request.courseName}` : " phòng"}`,
+        time: request.borrowDate ?? "Đang chờ duyệt",
+        type: "dot-orange",
+      }))
 
     const renderHome = () => (
       <div className="rounded-[28px] border border-slate-200 bg-[#f6fafb] p-6 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
@@ -209,8 +247,12 @@ export function PortalShell({
             </div>
 
             <ul className="space-y-3">
-              {notifications.map(({ text, time, type }) => (
-                <li key={text} className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
+              {notifications.length === 0 ? (
+                <li className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                  Chưa có phiếu mượn phòng mới cần xử lý.
+                </li>
+              ) : notifications.map(({ text, time, type }, index) => (
+                <li key={`${text}-${index}`} className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
                   <span
                     className={[
                       "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
@@ -283,7 +325,7 @@ export function PortalShell({
             </header>
 
             <div className="p-6">
-              {activePanel === "home" ? renderHome() : activePanel === "borrow" ? <BorrowRoomPanel /> : activePanel === "rooms" ? <RoomManagementPanel /> : activePanel === "scheduler" ? (
+              {activePanel === "home" ? renderHome() : activePanel === "borrow" ? <BorrowRoomPanel /> : activePanel === "rooms" ? <RoomManagementPanel /> : activePanel === "equipment" ? <EquipmentExplorer /> : activePanel === "scheduler" ? (
                 <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
                   {children}
                 </div>
@@ -338,6 +380,20 @@ export function PortalShell({
                 >
                   Lịch sử mượn phòng
                 </PortalLink>
+                {isLecturer && (
+                  <PortalLink
+                    active={activeTab === "incidents"}
+                    onClick={() => setActiveTab("incidents")}
+                    icon={<FileWarning className="size-4" />}
+                  >
+                    Báo cáo sự cố
+                    {openIncidentCount > 0 && (
+                      <span className="ml-1 min-w-5 rounded-full bg-red-100 px-1.5 py-0.5 text-xs font-bold text-red-700">
+                        {openIncidentCount}
+                      </span>
+                    )}
+                  </PortalLink>
+                )}
               </>
             ) : (
               <PortalLink href="/admin" active icon={<ShieldCheck className="size-4" />}>
@@ -352,6 +408,8 @@ export function PortalShell({
             children
           ) : activeTab === "history" ? (
             <BorrowHistoryPanel requesterType={isLecturer ? "Giảng viên" : "Sinh viên"} />
+          ) : activeTab === "incidents" && isLecturer ? (
+            <LecturerIncidentPanel />
           ) : (
             children
           )}
