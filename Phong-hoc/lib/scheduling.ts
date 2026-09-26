@@ -421,6 +421,7 @@ export function findIncrementalAssignment(
   if (!selected) return null
   const room = roomById.get(selected.roomId)
   return {
+    classId: cls.id,
     ...selected,
     shortage: Math.max(0, cls.size - (room?.capacity ?? 0)) || undefined,
   }

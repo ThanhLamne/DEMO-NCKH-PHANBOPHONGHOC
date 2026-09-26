@@ -11,6 +11,7 @@ import {
   ClipboardList,
   DoorOpen,
   Grid2x2,
+  History,
   Home,
   LayoutDashboard,
   Settings,
@@ -18,7 +19,9 @@ import {
   UserRound,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { BorrowHistoryPanel } from "@/components/borrow-history-panel"
 import { BorrowRoomPanel } from "@/components/borrow-room-panel"
+import { RoomManagementPanel } from "@/components/room-management-panel"
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data"
 import { autoSchedule } from "@/lib/scheduling"
 
@@ -34,6 +37,7 @@ export function PortalShell({
   const isAdmin = role === "admin"
   const isLecturer = role === "lecturer"
   const [activePanel, setActivePanel] = useState<AdminPanel>("home")
+  const [activeTab, setActiveTab] = useState<"register" | "history">("register")
   const [now, setNow] = useState<Date | null>(null)
 
   useEffect(() => {
@@ -279,7 +283,7 @@ export function PortalShell({
             </header>
 
             <div className="p-6">
-              {activePanel === "home" ? renderHome() : activePanel === "borrow" ? <BorrowRoomPanel /> : activePanel === "scheduler" ? (
+              {activePanel === "home" ? renderHome() : activePanel === "borrow" ? <BorrowRoomPanel /> : activePanel === "rooms" ? <RoomManagementPanel /> : activePanel === "scheduler" ? (
                 <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
                   {children}
                 </div>
@@ -319,9 +323,22 @@ export function PortalShell({
 
           <nav className="flex flex-wrap gap-2" aria-label="Khu vực hệ thống">
             {!isAdmin ? (
-              <PortalLink href={isLecturer ? "/lecturer" : "/student"} active icon={<DoorOpen className="size-4" />}>
-                {isLecturer ? "Đăng ký mượn phòng" : "Tra cứu &amp; mượn phòng"}
-              </PortalLink>
+              <>
+                <PortalLink
+                  active={activeTab === "register"}
+                  onClick={() => setActiveTab("register")}
+                  icon={<DoorOpen className="size-4" />}
+                >
+                  {isLecturer ? "Đăng ký mượn phòng" : "Tra cứu &amp; mượn phòng"}
+                </PortalLink>
+                <PortalLink
+                  active={activeTab === "history"}
+                  onClick={() => setActiveTab("history")}
+                  icon={<History className="size-4" />}
+                >
+                  Lịch sử mượn phòng
+                </PortalLink>
+              </>
             ) : (
               <PortalLink href="/admin" active icon={<ShieldCheck className="size-4" />}>
                 Phân bổ phòng học
@@ -330,7 +347,15 @@ export function PortalShell({
           </nav>
         </header>
 
-        <main className="mt-6">{children}</main>
+        <main className="mt-6">
+          {isAdmin ? (
+            children
+          ) : activeTab === "history" ? (
+            <BorrowHistoryPanel requesterType={isLecturer ? "Giảng viên" : "Sinh viên"} />
+          ) : (
+            children
+          )}
+        </main>
       </div>
     </div>
   )
@@ -341,23 +366,32 @@ function PortalLink({
   active,
   icon,
   children,
+  onClick,
 }: {
-  href: string
+  href?: string
   active: boolean
   icon: React.ReactNode
   children: React.ReactNode
+  onClick?: () => void
 }) {
+  const className = [
+    "flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all",
+    active
+      ? "border-primary bg-primary text-primary-foreground shadow-sm"
+      : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-accent",
+  ].join(" ")
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {icon}
+        {children}
+      </button>
+    )
+  }
+
   return (
-    <Link
-      href={href}
-      aria-current={active ? "page" : undefined}
-      className={[
-        "flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all",
-        active
-          ? "border-primary bg-primary text-primary-foreground shadow-sm"
-          : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-accent",
-      ].join(" ")}
-    >
+    <Link href={href ?? "/"} aria-current={active ? "page" : undefined} className={className}>
       {icon}
       {children}
     </Link>

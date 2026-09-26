@@ -1,10 +1,10 @@
-import { RoomLookup } from "@/components/room-lookup"
+import { BorrowRequestForm } from "@/components/borrow-request-form"
 import { PortalShell } from "@/components/portal-shell"
 
 export default function StudentPage() {
   return (
     <PortalShell role="student">
-      <RoomLookup />
+      <BorrowRequestForm requesterType="Sinh viên" />
     </PortalShell>
   )
 }

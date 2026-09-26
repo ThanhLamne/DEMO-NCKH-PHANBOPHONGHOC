@@ -915,7 +915,7 @@ export const SHEET_ROOMS: RoomInfo[] = [
   }
 ] as RoomInfo[];
 
-export const SHEET_CLASSES: ClassInfo[] = [
+const SHEET_CLASSES_RAW = [
   {
     "id": "K24-1",
     "name": "Lịch sử Đảng Cộng sản Việt Nam",
@@ -19771,4 +19771,6 @@ export const SHEET_CLASSES: ClassInfo[] = [
     "className": "26H5HTTA",
     "section": "1"
   }
-] as ClassInfo[];
+] as unknown as ClassInfo[];
+
+export const SHEET_CLASSES: ClassInfo[] = SHEET_CLASSES_RAW;

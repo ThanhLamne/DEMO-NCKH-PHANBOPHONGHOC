@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import { createPortal } from "react-dom"
-import { useEffect, useMemo, useState } from "react"
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
 import {
   Wand2,
   Plus,
@@ -21,7 +21,7 @@ import {
   Moon,
   Building2,
   Search,
-} from "lucide-react"
+} from "lucide-react";
 import {
   type ClassInfo,
   type ScheduleResult,
@@ -43,35 +43,45 @@ import {
   COHORT_LABELS,
   addClassIncrementally,
   removeClassFromSchedule,
-} from "@/lib/scheduling"
-import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data"
-import { clearAllocationSnapshot, loadAllocationSnapshot, saveAllocationSnapshot } from "@/lib/allocation-store"
+} from "@/lib/scheduling";
+import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
+import {
+  clearAllocationSnapshot,
+  loadAllocationSnapshot,
+  saveAllocationSnapshot,
+} from "@/lib/allocation-store";
+import {
+  BORROW_REQUESTS_UPDATED_EVENT,
+  isBorrowRequestInWeek,
+  loadBorrowRequests,
+  type BorrowRequest,
+} from "@/lib/borrow-store";
 
-const ROOMS = SHEET_ROOMS
+const ROOMS = SHEET_ROOMS;
 
 const SHIFT_ICON: Record<Shift, React.ReactNode> = {
   morning: <Sun className="size-4" />,
   afternoon: <CloudSun className="size-4" />,
   evening: <Moon className="size-4" />,
-}
+};
 
 const SHIFT_TONE: Record<Shift, string> = {
   morning: "border-amber-200 bg-amber-50/70 text-amber-700",
   afternoon: "border-sky-200 bg-sky-50/70 text-sky-700",
   evening: "border-indigo-200 bg-indigo-50/70 text-indigo-700",
-}
+};
 
 function capacityTone(capacity: number): string {
-  if (capacity >= 100) return "bg-primary/10 text-primary"
-  if (capacity >= 60) return "bg-sky-500/10 text-sky-700"
-  return "bg-emerald-500/10 text-emerald-700"
+  if (capacity >= 100) return "bg-primary/10 text-primary";
+  if (capacity >= 60) return "bg-sky-500/10 text-sky-700";
+  return "bg-emerald-500/10 text-emerald-700";
 }
 
 function buildingOrder(building?: string): string {
-  if (!building) return "ZZZ"
-  if (building === "HoiTruong") return "ZZZ"
-  if (building.includes("-")) return building.split("-").at(-1) ?? building
-  return building
+  if (!building) return "ZZZ";
+  if (building === "HoiTruong") return "ZZZ";
+  if (building.includes("-")) return building.split("-").at(-1) ?? building;
+  return building;
 }
 
 const CAMPUS_SCHEDULE_GROUPS = [
@@ -90,85 +100,170 @@ const CAMPUS_SCHEDULE_GROUPS = [
     label: "Cơ sở 3 - 77 NCT",
     tone: "border-emerald-200 bg-emerald-50/70 text-emerald-800",
   },
-]
+];
 
 export function AdminScheduler() {
-  const [classes, setClasses] = useState<ClassInfo[]>(SHEET_CLASSES)
-  const [result, setResult] = useState<ScheduleResult | null>(null)
-  const [selectedDay, setSelectedDay] = useState<number>(2)
-  const [editingClassId, setEditingClassId] = useState<string | null>(null)
-  const [newClassIds, setNewClassIds] = useState<string[]>([])
-  const [selectedCampus, setSelectedCampus] = useState<CampusFilter>("all")
-  const [selectedBuilding, setSelectedBuilding] = useState<string>("all")
-  const [selectedCohort, setSelectedCohort] = useState<CohortFilter>("all")
-  const [scheduleSearch, setScheduleSearch] = useState("")
-  const [highlightedClassId, setHighlightedClassId] = useState<string | null>(null)
+  const [classes, setClasses] = useState<ClassInfo[]>(SHEET_CLASSES);
+  const [result, setResult] = useState<ScheduleResult | null>(null);
+  const [selectedDay, setSelectedDay] = useState<number>(2);
+  const [editingClassId, setEditingClassId] = useState<string | null>(null);
+  const [newClassIds, setNewClassIds] = useState<string[]>([]);
+  const [selectedCampus, setSelectedCampus] = useState<CampusFilter>("all");
+  const [selectedBuilding, setSelectedBuilding] = useState<string>("all");
+  const [selectedCohort, setSelectedCohort] = useState<CohortFilter>("all");
+  const [scheduleSearch, setScheduleSearch] = useState("");
+  const [highlightedClassId, setHighlightedClassId] = useState<string | null>(
+    null,
+  );
+  const [borrowRequests, setBorrowRequests] = useState<BorrowRequest[]>([]);
 
   useEffect(() => {
     function clearHighlight(event: MouseEvent) {
-      const target = event.target
-      if (target instanceof Element && target.closest("[data-assignment-card]")) return
-      setHighlightedClassId(null)
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-assignment-card]"))
+        return;
+      setHighlightedClassId(null);
     }
-    document.addEventListener("mousedown", clearHighlight)
-    return () => document.removeEventListener("mousedown", clearHighlight)
-  }, [])
+    document.addEventListener("mousedown", clearHighlight);
+    return () => document.removeEventListener("mousedown", clearHighlight);
+  }, []);
 
   useEffect(() => {
-    const snapshot = loadAllocationSnapshot()
-    if (!snapshot) return
-    setClasses(snapshot.classes)
-    setResult(snapshot.result)
-    setNewClassIds(snapshot.classes.filter((item) => !SHEET_CLASSES.some((base) => base.id === item.id)).map((item) => item.id))
-  }, [])
+    const refreshBorrowRequests = () => setBorrowRequests(loadBorrowRequests());
+    refreshBorrowRequests();
+    window.addEventListener(
+      BORROW_REQUESTS_UPDATED_EVENT,
+      refreshBorrowRequests,
+    );
+    window.addEventListener("storage", refreshBorrowRequests);
+    return () => {
+      window.removeEventListener(
+        BORROW_REQUESTS_UPDATED_EVENT,
+        refreshBorrowRequests,
+      );
+      window.removeEventListener("storage", refreshBorrowRequests);
+    };
+  }, []);
 
   useEffect(() => {
-    if (result) saveAllocationSnapshot({ classes, result })
-  }, [classes, result])
+    const snapshot = loadAllocationSnapshot();
+    if (!snapshot) return;
+    setClasses(snapshot.classes);
+    setResult(snapshot.result);
+    setNewClassIds(
+      snapshot.classes
+        .filter((item) => !SHEET_CLASSES.some((base) => base.id === item.id))
+        .map((item) => item.id),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (result) saveAllocationSnapshot({ classes, result });
+  }, [classes, result]);
 
   const roomById = useMemo(() => {
-    const map = new Map(ROOMS.map((r) => [r.id, r]))
-    return map
-  }, [])
+    const map = new Map(ROOMS.map((r) => [r.id, r]));
+    return map;
+  }, []);
 
-  const classById = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes])
+  const approvedBorrowRequests = useMemo(
+    () =>
+      borrowRequests.filter(
+        (request) =>
+          isBorrowRequestInWeek(request) &&
+          request.status === "approved" &&
+          request.roomId,
+      ),
+    [borrowRequests],
+  );
+
+  const borrowedClasses = useMemo<ClassInfo[]>(
+    () =>
+      approvedBorrowRequests.map(
+        (request): ClassInfo => ({
+          id: `borrow-${request.id}`,
+          name: `Mượn phòng: ${request.courseName ?? request.purpose}`,
+          size: request.size,
+          day: request.day,
+          shift: request.shift,
+          periods: request.endPeriod - request.startPeriod + 1,
+          startPeriod: request.startPeriod,
+          endPeriod: request.endPeriod,
+          className: `${request.className ? `${request.className} · ` : ""}${request.requester} · ${request.requesterType} · ${request.purpose}`,
+        }),
+      ),
+    [approvedBorrowRequests],
+  );
+
+  const borrowedAssignments = useMemo(
+    () =>
+      approvedBorrowRequests.map((request) => ({
+        classId: `borrow-${request.id}`,
+        roomId: request.roomId!,
+        day: request.day,
+        shift: request.shift,
+        startPeriod: request.startPeriod,
+        endPeriod: request.endPeriod,
+      })),
+    [approvedBorrowRequests],
+  );
+
+  const displayAssignments = useMemo(
+    () => (result ? [...result.assignments, ...borrowedAssignments] : []),
+    [result, borrowedAssignments],
+  );
+
+  const classById = useMemo(
+    () => new Map([...classes, ...borrowedClasses].map((c) => [c.id, c])),
+    [classes, borrowedClasses],
+  );
 
   function handleSchedule() {
-    if (result) return
-    setResult(autoSchedule(classes, ROOMS))
+    if (result) return;
+    setResult(autoSchedule(classes, ROOMS));
   }
 
   function handleAddClass(cls: Omit<ClassInfo, "id">): string | null {
-    const normalizedName = cls.name.trim().toLocaleLowerCase()
-    if (classes.some((item) => item.name.trim().toLocaleLowerCase() === normalizedName)) {
-      return `Môn "${cls.name.trim()}" đã có trong danh sách lớp. Vui lòng nhập môn khác.`
+    const normalizedName = cls.name.trim().toLocaleLowerCase();
+    if (
+      classes.some(
+        (item) => item.name.trim().toLocaleLowerCase() === normalizedName,
+      )
+    ) {
+      return `Môn "${cls.name.trim()}" đã có trong danh sách lớp. Vui lòng nhập môn khác.`;
     }
 
-    let newClassId = createClassId()
+    let newClassId = createClassId();
     while (classes.some((item) => item.id === newClassId)) {
-      newClassId = createClassId()
+      newClassId = createClassId();
     }
-    const newClass = { ...cls, id: newClassId }
-    const nextClasses = [...classes, newClass]
-    setClasses(nextClasses)
-    setResult(result ? addClassIncrementally(newClass, ROOMS, result) : autoSchedule(nextClasses, ROOMS))
-    setNewClassIds((prev) => [...prev, newClass.id])
-    return null
+    const newClass = { ...cls, id: newClassId };
+    const nextClasses = [...classes, newClass];
+    setClasses(nextClasses);
+    setResult(
+      result
+        ? addClassIncrementally(newClass, ROOMS, result)
+        : autoSchedule(nextClasses, ROOMS),
+    );
+    setNewClassIds((prev) => [...prev, newClass.id]);
+    return null;
   }
 
   function handleRemoveClass(id: string) {
-    setClasses((prev) => prev.filter((c) => c.id !== id))
-    setResult((prev) => (prev ? removeClassFromSchedule(id, ROOMS, prev) : prev))
-    setEditingClassId(null)
-    setNewClassIds((prev) => prev.filter((classId) => classId !== id))
+    setClasses((prev) => prev.filter((c) => c.id !== id));
+    setResult((prev) =>
+      prev ? removeClassFromSchedule(id, ROOMS, prev) : prev,
+    );
+    setEditingClassId(null);
+    setNewClassIds((prev) => prev.filter((classId) => classId !== id));
   }
 
   function handleResetData() {
-    setClasses(SHEET_CLASSES)
-    setResult(null)
-    clearAllocationSnapshot()
-    setEditingClassId(null)
-    setNewClassIds([])
+    setClasses(SHEET_CLASSES);
+    setResult(null);
+    clearAllocationSnapshot();
+    setEditingClassId(null);
+    setNewClassIds([]);
   }
 
   // Xếp thủ công 1 lớp bị đẩy ra ngoài vào phòng đủ điều kiện đã chọn.
@@ -180,34 +275,42 @@ export function AdminScheduler() {
       shift: alt.shift,
       startPeriod: alt.startPeriod,
       endPeriod: alt.endPeriod,
-    }
-    setClasses((prev) => prev.map((c) => (c.id === cls.id ? { ...c, day: alt.day, shift: alt.shift } : c)))
+    };
+    setClasses((prev) =>
+      prev.map((c) =>
+        c.id === cls.id ? { ...c, day: alt.day, shift: alt.shift } : c,
+      ),
+    );
     setResult((prev) => {
-      if (!prev) return prev
+      if (!prev) return prev;
       return {
         ...prev,
         assignments: [...prev.assignments, updatedAssignment],
         unassigned: prev.unassigned.filter((u) => u.classInfo.id !== cls.id),
-      }
-    })
-    const room = roomById.get(alt.roomId)
-    setSelectedDay(alt.day)
-    setSelectedCampus(room?.campus ?? "all")
-    setSelectedBuilding(room?.building ?? "all")
-    setSelectedCohort(cls.cohort ?? "all")
-    setEditingClassId(null)
-    setHighlightedClassId(cls.id)
+      };
+    });
+    const room = roomById.get(alt.roomId);
+    setSelectedDay(alt.day);
+    setSelectedCampus(room?.campus ?? "all");
+    setSelectedBuilding(room?.building ?? "all");
+    setSelectedCohort(cls.cohort ?? "all");
+    setEditingClassId(null);
+    setHighlightedClassId(cls.id);
     window.setTimeout(() => {
-      document.getElementById(`assignment-${cls.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
-    }, 0)
+      document
+        .getElementById(`assignment-${cls.id}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
   }
 
   function handleMoveClass(classId: string, alt: AltSlot) {
     setClasses((prev) =>
-      prev.map((c) => (c.id === classId ? { ...c, day: alt.day, shift: alt.shift } : c)),
-    )
+      prev.map((c) =>
+        c.id === classId ? { ...c, day: alt.day, shift: alt.shift } : c,
+      ),
+    );
     setResult((prev) => {
-      if (!prev) return prev
+      if (!prev) return prev;
       return {
         ...prev,
         assignments: prev.assignments.map((assignment) =>
@@ -223,98 +326,145 @@ export function AdminScheduler() {
             : assignment,
         ),
         unassigned: prev.unassigned,
-      }
-    })
-    setSelectedDay(alt.day)
-    setEditingClassId(null)
-    setHighlightedClassId(classId)
+      };
+    });
+    setSelectedDay(alt.day);
+    setEditingClassId(null);
+    setHighlightedClassId(classId);
   }
 
   function showAssignment(assignment: import("@/lib/scheduling").Assignment) {
-    const cls = classById.get(assignment.classId)
-    const room = roomById.get(assignment.roomId)
-    if (!cls || !room) return
-    setSelectedDay(assignment.day)
-    setSelectedCampus(room.campus ?? "all")
-    setSelectedBuilding(room.building ?? "all")
-    setSelectedCohort(cls.cohort ?? "all")
-    setHighlightedClassId(assignment.classId)
+    const cls = classById.get(assignment.classId);
+    const room = roomById.get(assignment.roomId);
+    if (!cls || !room) return;
+    setSelectedDay(assignment.day);
+    setSelectedCampus(room.campus ?? "all");
+    setSelectedBuilding(room.building ?? "all");
+    setSelectedCohort(cls.cohort ?? "all");
+    setHighlightedClassId(assignment.classId);
     window.setTimeout(() => {
-      document.getElementById(`assignment-${assignment.classId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })
-    }, 0)
+      document
+        .getElementById(`assignment-${assignment.classId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
   }
 
   const dayAssignments = useMemo(() => {
-    if (!result) return []
-    return result.assignments.filter(
+    if (!result) return [];
+    return displayAssignments.filter(
       (assignment) =>
         assignment.day === selectedDay &&
-        (selectedCohort === "all" || classById.get(assignment.classId)?.cohort === selectedCohort) &&
-        (selectedCampus === "all" || roomById.get(assignment.roomId)?.campus === selectedCampus) &&
-        (selectedBuilding === "all" || roomById.get(assignment.roomId)?.building === selectedBuilding),
-    )
-  }, [result, selectedDay, selectedCohort, selectedCampus, selectedBuilding, roomById, classById])
+        (selectedCohort === "all" ||
+          classById.get(assignment.classId)?.cohort === selectedCohort) &&
+        (selectedCampus === "all" ||
+          roomById.get(assignment.roomId)?.campus === selectedCampus) &&
+        (selectedBuilding === "all" ||
+          roomById.get(assignment.roomId)?.building === selectedBuilding),
+    );
+  }, [
+    displayAssignments,
+    selectedDay,
+    selectedCohort,
+    selectedCampus,
+    selectedBuilding,
+    roomById,
+    classById,
+  ]);
 
   const searchResults = useMemo(() => {
-    const query = scheduleSearch.trim().toLocaleLowerCase()
-    if (!result || !query) return []
+    const query = scheduleSearch.trim().toLocaleLowerCase();
+    if (!result || !query) return [];
 
-    return result.assignments
+    return displayAssignments
       .filter((assignment) => {
-        const cls = classById.get(assignment.classId)
-        const room = roomById.get(assignment.roomId)
-        if (!cls || !room) return false
-        if (selectedCohort !== "all" && cls.cohort !== selectedCohort) return false
-        if (selectedCampus !== "all" && room.campus !== selectedCampus) return false
-        if (selectedBuilding !== "all" && room.building !== selectedBuilding) return false
-        return [cls.name, cls.className, cls.courseCode, cls.cohort, cls.section, room.name]
+        const cls = classById.get(assignment.classId);
+        const room = roomById.get(assignment.roomId);
+        if (!cls || !room) return false;
+        if (selectedCohort !== "all" && cls.cohort !== selectedCohort)
+          return false;
+        if (selectedCampus !== "all" && room.campus !== selectedCampus)
+          return false;
+        if (selectedBuilding !== "all" && room.building !== selectedBuilding)
+          return false;
+        return [
+          cls.name,
+          cls.className,
+          cls.courseCode,
+          cls.cohort,
+          cls.section,
+          room.name,
+        ]
           .filter(Boolean)
-          .some((value) => value?.toLocaleLowerCase().includes(query))
+          .some((value) => value?.toLocaleLowerCase().includes(query));
       })
-      .sort((a, b) => a.day - b.day || a.startPeriod - b.startPeriod)
-  }, [result, scheduleSearch, selectedCohort, selectedCampus, selectedBuilding, roomById, classById])
+      .sort((a, b) => a.day - b.day || a.startPeriod - b.startPeriod);
+  }, [
+    displayAssignments,
+    scheduleSearch,
+    selectedCohort,
+    selectedCampus,
+    selectedBuilding,
+    roomById,
+    classById,
+  ]);
 
   const buildingGroups = useMemo(
     () =>
       [
         { campus: "36 Xuân La" as const, label: "Cơ sở 36 Xuân La" },
-        { campus: "371 Nguyễn Hoàng Tôn" as const, label: "Cơ sở 371 Nguyễn Hoàng Tôn" },
+        {
+          campus: "371 Nguyễn Hoàng Tôn" as const,
+          label: "Cơ sở 371 Nguyễn Hoàng Tôn",
+        },
         { campus: "77 NCT" as const, label: "Cơ sở 3 - 77 NCT" },
       ].map((group) => ({
         ...group,
-        buildings: [...new Set(
-          ROOMS
-            .filter((room) => room.campus === group.campus)
-            .map((room) => room.building)
-            .filter((value): value is string => Boolean(value)),
-        )].sort((a, b) => buildingOrder(a).localeCompare(buildingOrder(b), "vi")),
+        buildings: [
+          ...new Set(
+            ROOMS.filter((room) => room.campus === group.campus)
+              .map((room) => room.building)
+              .filter((value): value is string => Boolean(value)),
+          ),
+        ].sort((a, b) =>
+          buildingOrder(a).localeCompare(buildingOrder(b), "vi"),
+        ),
       })),
     [],
-  )
+  );
 
   const assignedCountByDay = useMemo(() => {
-    const map = new Map<number, number>()
+    const map = new Map<number, number>();
     if (result) {
-      for (const assignment of result.assignments) {
-        const room = roomById.get(assignment.roomId)
-        const cls = classById.get(assignment.classId)
+      for (const assignment of displayAssignments) {
+        const room = roomById.get(assignment.roomId);
+        const cls = classById.get(assignment.classId);
         if (
           (selectedCohort === "all" || cls?.cohort === selectedCohort) &&
           (selectedCampus === "all" || room?.campus === selectedCampus) &&
           (selectedBuilding === "all" || room?.building === selectedBuilding)
         ) {
-          map.set(assignment.day, (map.get(assignment.day) ?? 0) + 1)
+          map.set(assignment.day, (map.get(assignment.day) ?? 0) + 1);
         }
       }
     }
-    return map
-  }, [result, selectedCohort, selectedCampus, selectedBuilding, roomById, classById])
+    return map;
+  }, [
+    displayAssignments,
+    selectedCohort,
+    selectedCampus,
+    selectedBuilding,
+    roomById,
+    classById,
+  ]);
 
   return (
     <div className="space-y-6">
       <AddClassForm onAdd={handleAddClass} />
 
-      <section aria-label="Chọn khóa xem lịch phòng" className="rounded-2xl border border-white/60 bg-white/60 p-4 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl">
+      <section
+        aria-label="Chọn khóa xem lịch phòng"
+        className="rounded-2xl border border-white/60 bg-white/60 p-4 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl"
+      >
         <div className="mb-3 flex items-center gap-2 text-sm font-bold text-foreground">
           <CalendarDays className="size-4 text-primary" />
           Lịch phòng theo khóa
@@ -339,11 +489,13 @@ export function AdminScheduler() {
             </button>
           ))}
         </div>
-        {selectedCohort === "K26" && classes.every((item) => item.cohort !== "K26") && (
-          <p className="mt-3 text-xs text-amber-700">
-            Chưa có dữ liệu thời khóa biểu Khóa 26 trong Google Sheet hiện tại.
-          </p>
-        )}
+        {selectedCohort === "K26" &&
+          classes.every((item) => item.cohort !== "K26") && (
+            <p className="mt-3 text-xs text-amber-700">
+              Chưa có dữ liệu thời khóa biểu Khóa 26 trong Google Sheet hiện
+              tại.
+            </p>
+          )}
       </section>
 
       {/* Điều khiển & tổng quan */}
@@ -354,10 +506,12 @@ export function AdminScheduler() {
           </div>
           <div>
             <p className="text-sm font-semibold text-foreground">
-              {classes.length} lớp trong thời khóa biểu · {ROOMS.length} phòng khả dụng
+              {classes.length} lớp trong thời khóa biểu · {ROOMS.length} phòng
+              khả dụng
             </p>
             <p className="text-xs text-muted-foreground">
-              Multi-pass Best-Fit: giữ nguyên TKB K23–K25, ưu tiên lớp ≥150, sau đó lớp lớn/nhỏ; phần còn lại là vùng dự trù K26.
+              Multi-pass Best-Fit: giữ nguyên TKB K23–K25, ưu tiên lớp ≥150, sau
+              đó lớp lớn/nhỏ; phần còn lại là vùng dự trù K26.
             </p>
           </div>
         </div>
@@ -382,12 +536,20 @@ export function AdminScheduler() {
       </div>
 
       {result && (
-        <section className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4" aria-label="Kết quả sắp xếp">
-          <ResultStat icon={<Layers className="size-5" />} label="Tổng lớp" value={classes.length} tone="navy" />
+        <section
+          className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4"
+          aria-label="Kết quả sắp xếp"
+        >
+          <ResultStat
+            icon={<Layers className="size-5" />}
+            label="Tổng lớp"
+            value={classes.length}
+            tone="navy"
+          />
           <ResultStat
             icon={<CheckCircle2 className="size-5" />}
             label="Đã xếp phòng"
-            value={result.assignments.length}
+            value={displayAssignments.length}
             tone="green"
           />
           <ResultStat
@@ -395,33 +557,46 @@ export function AdminScheduler() {
             label="Bị đẩy ra ngoài"
             value={result.unassigned.length}
             tone="red"
-            onClick={() => document.getElementById("unassigned-classes")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            onClick={() =>
+              document
+                .getElementById("unassigned-classes")
+                ?.scrollIntoView({ behavior: "smooth", block: "start" })
+            }
           />
           <ResultStat
             icon={<Users className="size-5" />}
             label="Sĩ số đã bố trí"
-            value={result.assignments.reduce((s, a) => s + (classById.get(a.classId)?.size ?? 0), 0)}
+            value={displayAssignments.reduce(
+              (s, a) => s + (classById.get(a.classId)?.size ?? 0),
+              0,
+            )}
             tone="amber"
           />
         </section>
       )}
 
-      <section aria-label="Chọn cơ sở phòng học" className="rounded-2xl border border-white/60 bg-white/60 p-4 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl">
+      <section
+        aria-label="Chọn cơ sở phòng học"
+        className="rounded-2xl border border-white/60 bg-white/60 p-4 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl"
+      >
         <div className="mb-3 flex items-center gap-2 text-sm font-bold text-foreground">
           <Building2 className="size-4 text-primary" />
           Khu vực phòng học
         </div>
         <div className="grid w-full gap-2 md:grid-cols-3">
           {(Object.keys(CAMPUS_LABELS) as CampusFilter[]).map((campus) => {
-            const count = campus === "all" ? ROOMS.length : ROOMS.filter((room) => room.campus === campus).length
-            const isAll = campus === "all"
+            const count =
+              campus === "all"
+                ? ROOMS.length
+                : ROOMS.filter((room) => room.campus === campus).length;
+            const isAll = campus === "all";
             return (
               <button
                 key={campus}
                 type="button"
                 onClick={() => {
-                  setSelectedCampus(campus)
-                  setSelectedBuilding("all")
+                  setSelectedCampus(campus);
+                  setSelectedBuilding("all");
                 }}
                 className={[
                   "group relative h-[59px] overflow-hidden rounded-lg border px-3 py-2 text-left transition-all",
@@ -434,7 +609,9 @@ export function AdminScheduler() {
                     : "border-border bg-card text-foreground hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md",
                 ].join(" ")}
               >
-                <span className="relative block text-sm font-bold leading-5">{CAMPUS_LABELS[campus]}</span>
+                <span className="relative block text-sm font-bold leading-5">
+                  {CAMPUS_LABELS[campus]}
+                </span>
                 <span
                   className={[
                     "relative block text-sm font-semibold leading-5 tabular-nums",
@@ -448,11 +625,13 @@ export function AdminScheduler() {
                   {count} phòng
                 </span>
               </button>
-            )
+            );
           })}
         </div>
         <div className="mt-4 space-y-3 border-t border-border/70 pt-3">
-          <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Chọn tòa</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+            Chọn tòa
+          </p>
           <button
             type="button"
             onClick={() => setSelectedBuilding("all")}
@@ -466,10 +645,18 @@ export function AdminScheduler() {
             Tất cả tòa
           </button>
           {buildingGroups
-            .filter((group) => selectedCampus === "all" || group.campus === selectedCampus)
+            .filter(
+              (group) =>
+                selectedCampus === "all" || group.campus === selectedCampus,
+            )
             .map((group) => (
-              <div key={group.campus} className="rounded-xl border border-border/70 bg-card/60 p-3">
-                <p className="mb-2 text-xs font-bold text-muted-foreground">{group.label}</p>
+              <div
+                key={group.campus}
+                className="rounded-xl border border-border/70 bg-card/60 p-3"
+              >
+                <p className="mb-2 text-xs font-bold text-muted-foreground">
+                  {group.label}
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {group.buildings.map((building) => (
                     <button
@@ -483,7 +670,9 @@ export function AdminScheduler() {
                           : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-accent",
                       ].join(" ")}
                     >
-                      {building === "HoiTruong" ? "Hội trường" : `Tòa ${buildingOrder(building)}`}
+                      {building === "HoiTruong"
+                        ? "Hội trường"
+                        : `Tòa ${buildingOrder(building)}`}
                     </button>
                   ))}
                 </div>
@@ -499,14 +688,19 @@ export function AdminScheduler() {
             Vùng dự trù K26
           </div>
           <p className="mt-1 text-xs leading-5">
-            Hệ thống khóa các phòng chưa dùng của K23–K25 theo từng Thứ + ca; mục tiêu ca sáng và chiều là tối thiểu 18 phòng.
+            Hệ thống khóa các phòng chưa dùng của K23–K25 theo từng Thứ + ca;
+            mục tiêu ca sáng và chiều là tối thiểu 18 phòng.
           </p>
           {result.reserveWarnings.length > 0 ? (
             <ul className="mt-2 list-disc pl-5 text-xs">
-              {result.reserveWarnings.slice(0, 4).map((warning) => <li key={warning}>{warning}</li>)}
+              {result.reserveWarnings.slice(0, 4).map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
             </ul>
           ) : (
-            <p className="mt-2 text-xs font-semibold text-emerald-700">Tất cả khung sáng/chiều đều đạt mức dự trù tối thiểu.</p>
+            <p className="mt-2 text-xs font-semibold text-emerald-700">
+              Tất cả khung sáng/chiều đều đạt mức dự trù tối thiểu.
+            </p>
           )}
         </section>
       )}
@@ -517,8 +711,12 @@ export function AdminScheduler() {
             <CalendarDays className="size-7" />
           </div>
           <p className="max-w-md text-balance text-sm text-muted-foreground">
-            Thêm lớp mới nếu cần, rồi bấm <span className="font-semibold text-foreground">Sắp xếp tự động</span> để hệ
-            thống phân bổ phòng học theo thời khóa biểu và hiển thị lịch tuần bên dưới.
+            Thêm lớp mới nếu cần, rồi bấm{" "}
+            <span className="font-semibold text-foreground">
+              Sắp xếp tự động
+            </span>{" "}
+            để hệ thống phân bổ phòng học theo thời khóa biểu và hiển thị lịch
+            tuần bên dưới.
           </p>
         </div>
       )}
@@ -526,15 +724,21 @@ export function AdminScheduler() {
       {result && (
         <>
           <NewClassesPanel
-            classes={newClassIds.map((id) => classById.get(id)).filter((item): item is ClassInfo => Boolean(item))}
+            classes={newClassIds
+              .map((id) => classById.get(id))
+              .filter((item): item is ClassInfo => Boolean(item))}
             result={result}
             onShowAssignment={showAssignment}
           />
           {/* Bộ chọn thứ trong tuần */}
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Thứ trong tuần">
+          <div
+            className="flex flex-wrap gap-2"
+            role="tablist"
+            aria-label="Thứ trong tuần"
+          >
             {DAYS.map((day) => {
-              const active = day === selectedDay
-              const count = assignedCountByDay.get(day) ?? 0
+              const active = day === selectedDay;
+              const count = assignedCountByDay.get(day) ?? 0;
               return (
                 <button
                   key={day}
@@ -554,21 +758,27 @@ export function AdminScheduler() {
                   <span
                     className={[
                       "flex min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-bold tabular-nums",
-                      active ? "bg-white/20 text-primary-foreground" : "bg-muted text-muted-foreground",
+                      active
+                        ? "bg-white/20 text-primary-foreground"
+                        : "bg-muted text-muted-foreground",
                     ].join(" ")}
                   >
                     {count}
                   </span>
                 </button>
-              )
+              );
             })}
           </div>
 
           {/* Lịch phòng theo ca */}
-          <section aria-label={`Lịch phòng ${COHORT_LABELS[selectedCohort]} ${DAY_LABELS[selectedDay]}`}>
+          <section
+            aria-label={`Lịch phòng ${COHORT_LABELS[selectedCohort]} ${DAY_LABELS[selectedDay]}`}
+          >
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/15 bg-primary/5 px-4 py-3">
               <div>
-                <p className="text-sm font-bold text-primary">Lịch phòng học đã phân bổ</p>
+                <p className="text-sm font-bold text-primary">
+                  Lịch phòng học đã phân bổ
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {COHORT_LABELS[selectedCohort]} · {DAY_LABELS[selectedDay]}
                 </p>
@@ -578,7 +788,10 @@ export function AdminScheduler() {
               </span>
             </div>
             <div className="mb-4 rounded-2xl border border-border bg-card p-3 shadow-sm">
-              <label htmlFor="schedule-search" className="mb-2 flex items-center gap-2 text-sm font-bold text-foreground">
+              <label
+                htmlFor="schedule-search"
+                className="mb-2 flex items-center gap-2 text-sm font-bold text-foreground"
+              >
                 <Search className="size-4 text-primary" />
                 Tìm môn học hoặc tên lớp
               </label>
@@ -606,29 +819,40 @@ export function AdminScheduler() {
                 <div className="mt-3">
                   {searchResults.length === 0 ? (
                     <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-                      Không tìm thấy môn học hoặc lớp phù hợp với bộ lọc hiện tại.
+                      Không tìm thấy môn học hoặc lớp phù hợp với bộ lọc hiện
+                      tại.
                     </p>
                   ) : (
                     <ul className="grid gap-2 md:grid-cols-2">
                       {searchResults.map((assignment) => {
-                        const cls = classById.get(assignment.classId)
-                        const room = roomById.get(assignment.roomId)
-                        if (!cls || !room) return null
+                        const cls = classById.get(assignment.classId);
+                        const room = roomById.get(assignment.roomId);
+                        if (!cls || !room) return null;
                         return (
-                          <li key={`search-${assignment.classId}`} className="rounded-xl border border-primary/15 bg-primary/5 px-3 py-2.5">
+                          <li
+                            key={`search-${assignment.classId}`}
+                            className="rounded-xl border border-primary/15 bg-primary/5 px-3 py-2.5"
+                          >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="text-sm font-semibold text-foreground">{cls.name}</p>
+                                <p className="text-sm font-semibold text-foreground">
+                                  {cls.name}
+                                </p>
                                 {cls.className && (
-                                  <p className="mt-0.5 break-words text-xs text-muted-foreground">Lớp: {cls.className}</p>
+                                  <p className="mt-0.5 break-words text-xs text-muted-foreground">
+                                    Lớp: {cls.className}
+                                  </p>
                                 )}
                               </div>
-                              <span className={`shrink-0 rounded-lg px-2 py-1 text-xs font-bold ${capacityTone(room.capacity)}`}>
+                              <span
+                                className={`shrink-0 rounded-lg px-2 py-1 text-xs font-bold ${capacityTone(room.capacity)}`}
+                              >
                                 {room.name}
                               </span>
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {DAY_LABELS[assignment.day]} · Ca {SHIFT_LABELS[assignment.shift]} · {room.campus}
+                              {DAY_LABELS[assignment.day]} · Ca{" "}
+                              {SHIFT_LABELS[assignment.shift]} · {room.campus}
                             </p>
                             <button
                               type="button"
@@ -638,7 +862,7 @@ export function AdminScheduler() {
                               Xem trong lịch
                             </button>
                           </li>
-                        )
+                        );
                       })}
                     </ul>
                   )}
@@ -646,112 +870,153 @@ export function AdminScheduler() {
               )}
             </div>
             <div className="grid gap-4 lg:grid-cols-3">
-            {SHIFTS.map((shift) => {
-              const shiftItems = dayAssignments
-                .filter((a) => a.shift === shift)
-                .sort((a, b) => a.startPeriod - b.startPeriod)
-              return (
-                <div
-                  key={shift}
-                  className="flex flex-col rounded-2xl border border-white/60 bg-white/60 p-4 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl"
-                >
-                  <div className={`mb-3 flex items-center justify-between rounded-xl border px-3 py-2 ${SHIFT_TONE[shift]}`}>
-                    <span className="flex items-center gap-2 text-sm font-bold">
-                      {SHIFT_ICON[shift]}
-                      Ca {SHIFT_LABELS[shift]}
-                    </span>
-                    <span className="text-xs font-medium">
-                      Tiết {SHIFT_PERIODS[shift][0]}–{SHIFT_PERIODS[shift][SHIFT_PERIODS[shift].length - 1]}
-                    </span>
-                  </div>
-
-                  {shiftItems.length === 0 ? (
-                    <p className="py-6 text-center text-xs text-muted-foreground">Chưa có lớp nào trong ca này.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {CAMPUS_SCHEDULE_GROUPS.map((group) => {
-                        const campusItems = shiftItems.filter((assignment) => roomById.get(assignment.roomId)?.campus === group.campus)
-                        if (campusItems.length === 0) return null
-                        return (
-                          <section key={group.campus} aria-label={group.label}>
-                            <div className={`mb-3 rounded-xl border px-3.5 py-3 ${group.tone}`}>
-                              <div className="flex items-center justify-between gap-2">
-                                <div>
-                                  <p className="text-sm font-bold">{group.label}</p>
-                                  <p className="mt-0.5 text-[11px] opacity-75">Các lớp đã được xếp phòng tại cơ sở này</p>
-                                </div>
-                                <span className="rounded-full bg-white/85 px-2.5 py-1 text-[11px] font-bold">
-                                {campusItems.length} lớp
-                                </span>
-                              </div>
-                            </div>
-                            <ul className="flex flex-col gap-2.5">
-                              {campusItems.map((a) => {
-                                const cls = classById.get(a.classId)
-                                const room = roomById.get(a.roomId)
-                                if (!cls || !room) return null
-                                return (
-                                  <li
-                                    key={a.classId}
-                                    id={`assignment-${a.classId}`}
-                                    data-assignment-card
-                                    onClick={() =>
-                                      setHighlightedClassId((current) => (current === a.classId ? current : null))
-                                    }
-                                    className={[
-                                      "rounded-xl border bg-card p-3 shadow-sm transition-all hover:shadow-md",
-                                      highlightedClassId === a.classId
-                                        ? "border-amber-400 bg-amber-50/70 shadow-[0_0_0_4px_rgba(251,191,36,0.28),0_0_24px_rgba(251,191,36,0.35)]"
-                                        : "border-border",
-                                    ].join(" ")}
-                                  >
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <p className="text-pretty text-sm font-semibold leading-tight text-foreground">
-                                          {cls.name}
-                                        </p>
-                                        {cls.className && (
-                                          <p className="mt-1 break-words text-xs font-medium leading-4 text-muted-foreground">
-                                            Lớp: {cls.className}
-                                          </p>
-                                        )}
-                                      </div>
-                                      <span className={`shrink-0 rounded-lg px-2 py-1 text-xs font-bold ${capacityTone(room.capacity)}`}>
-                                        {room.name}
-                                      </span>
-                                    </div>
-                                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                                      <span className="inline-flex items-center gap-1">
-                                        <Users className="size-3.5" />
-                                        {cls.size}/{room.capacity} chỗ
-                                      </span>
-                                      <span className="inline-flex items-center gap-1">
-                                        <CalendarDays className="size-3.5" />
-                                        Tiết {a.startPeriod}
-                                        {a.endPeriod !== a.startPeriod ? `–${a.endPeriod}` : ""}
-                                      </span>
-                                      <span className="font-mono">{rangeTime(a.startPeriod, a.endPeriod)}</span>
-                                    </div>
-                                    <AssignmentEditor
-                                      assignment={a}
-                                      classInfo={cls}
-                                      assignments={result.assignments}
-                                      open={editingClassId === cls.id}
-                                      onToggle={() => setEditingClassId((current) => (current === cls.id ? null : cls.id))}
-                                      onMove={handleMoveClass}
-                                    />
-                                  </li>
-                                )
-                              })}
-                            </ul>
-                          </section>
-                        )
-                      })}
+              {SHIFTS.map((shift) => {
+                const shiftItems = dayAssignments
+                  .filter((a) => a.shift === shift)
+                  .sort((a, b) => a.startPeriod - b.startPeriod);
+                return (
+                  <div
+                    key={shift}
+                    className="flex flex-col rounded-2xl border border-white/60 bg-white/60 p-4 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl"
+                  >
+                    <div
+                      className={`mb-3 flex items-center justify-between rounded-xl border px-3 py-2 ${SHIFT_TONE[shift]}`}
+                    >
+                      <span className="flex items-center gap-2 text-sm font-bold">
+                        {SHIFT_ICON[shift]}
+                        Ca {SHIFT_LABELS[shift]}
+                      </span>
+                      <span className="text-xs font-medium">
+                        Tiết {SHIFT_PERIODS[shift][0]}–
+                        {SHIFT_PERIODS[shift][SHIFT_PERIODS[shift].length - 1]}
+                      </span>
                     </div>
-                  )}
-                </div>
-              )
-            })}
+
+                    {shiftItems.length === 0 ? (
+                      <p className="py-6 text-center text-xs text-muted-foreground">
+                        Chưa có lớp nào trong ca này.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {CAMPUS_SCHEDULE_GROUPS.map((group) => {
+                          const campusItems = shiftItems.filter(
+                            (assignment) =>
+                              roomById.get(assignment.roomId)?.campus ===
+                              group.campus,
+                          );
+                          if (campusItems.length === 0) return null;
+                          return (
+                            <section
+                              key={group.campus}
+                              aria-label={group.label}
+                            >
+                              <div
+                                className={`mb-3 rounded-xl border px-3.5 py-3 ${group.tone}`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-bold">
+                                      {group.label}
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] opacity-75">
+                                      Các lớp đã được xếp phòng tại cơ sở này
+                                    </p>
+                                  </div>
+                                  <span className="rounded-full bg-white/85 px-2.5 py-1 text-[11px] font-bold">
+                                    {campusItems.length} lớp
+                                  </span>
+                                </div>
+                              </div>
+                              <ul className="flex flex-col gap-2.5">
+                                {campusItems.map((a) => {
+                                  const cls = classById.get(a.classId);
+                                  const room = roomById.get(a.roomId);
+                                  const isBorrowed =
+                                    a.classId.startsWith("borrow-");
+                                  if (!cls || !room) return null;
+                                  return (
+                                    <li
+                                      key={a.classId}
+                                      id={`assignment-${a.classId}`}
+                                      data-assignment-card
+                                      onClick={() =>
+                                        setHighlightedClassId((current) =>
+                                          current === a.classId
+                                            ? current
+                                            : null,
+                                        )
+                                      }
+                                      className={[
+                                        "rounded-xl border bg-card p-3 shadow-sm transition-all hover:shadow-md",
+                                        highlightedClassId === a.classId
+                                          ? "border-amber-400 bg-amber-50/70 shadow-[0_0_0_4px_rgba(251,191,36,0.28),0_0_24px_rgba(251,191,36,0.35)]"
+                                          : "border-border",
+                                      ].join(" ")}
+                                    >
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                          <p className="text-pretty text-sm font-semibold leading-tight text-foreground">
+                                            {cls.name}
+                                          </p>
+                                          {cls.className && (
+                                            <p className="mt-1 break-words text-xs font-medium leading-4 text-muted-foreground">
+                                              Lớp: {cls.className}
+                                            </p>
+                                          )}
+                                        </div>
+                                        <span
+                                          className={`shrink-0 rounded-lg px-2 py-1 text-xs font-bold ${capacityTone(room.capacity)}`}
+                                        >
+                                          {room.name}
+                                        </span>
+                                      </div>
+                                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                        <span className="inline-flex items-center gap-1">
+                                          <Users className="size-3.5" />
+                                          {cls.size}/{room.capacity} chỗ
+                                        </span>
+                                        <span className="inline-flex items-center gap-1">
+                                          <CalendarDays className="size-3.5" />
+                                          Tiết {a.startPeriod}
+                                          {a.endPeriod !== a.startPeriod
+                                            ? `–${a.endPeriod}`
+                                            : ""}
+                                        </span>
+                                        <span className="font-mono">
+                                          {rangeTime(
+                                            a.startPeriod,
+                                            a.endPeriod,
+                                          )}
+                                        </span>
+                                      </div>
+                                      {!isBorrowed && (
+                                        <AssignmentEditor
+                                          assignment={a}
+                                          classInfo={cls}
+                                          assignments={result.assignments}
+                                          open={editingClassId === cls.id}
+                                          onToggle={() =>
+                                            setEditingClassId((current) =>
+                                              current === cls.id
+                                                ? null
+                                                : cls.id,
+                                            )
+                                          }
+                                          onMove={handleMoveClass}
+                                        />
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </section>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </section>
 
@@ -760,9 +1025,11 @@ export function AdminScheduler() {
       )}
 
       {/* Danh sách lớp chỉ dùng trước khi chạy xếp phòng. Sau đó ưu tiên hiển thị lịch phòng. */}
-      {!result && <ClassListPanel classes={classes} onRemove={handleRemoveClass} />}
+      {!result && (
+        <ClassListPanel classes={classes} onRemove={handleRemoveClass} />
+      )}
     </div>
-  )
+  );
 }
 
 function ResultStat({
@@ -772,58 +1039,73 @@ function ResultStat({
   tone,
   onClick,
 }: {
-  icon: React.ReactNode
-  label: string
-  value: number
-  tone: "navy" | "green" | "red" | "amber"
-  onClick?: () => void
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone: "navy" | "green" | "red" | "amber";
+  onClick?: () => void;
 }) {
   const tones = {
     navy: "text-primary bg-primary/10",
     green: "text-emerald-600 bg-emerald-500/10",
     red: "text-red-600 bg-red-500/10",
     amber: "text-amber-600 bg-amber-500/10",
-  } as const
+  } as const;
   const content = (
     <>
-      <div className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}>{icon}</div>
+      <div
+        className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}
+      >
+        {icon}
+      </div>
       <div className="leading-tight">
-        <div className="text-2xl font-bold tabular-nums text-foreground">{value}</div>
+        <div className="text-2xl font-bold tabular-nums text-foreground">
+          {value}
+        </div>
         <div className="text-xs text-muted-foreground">{label}</div>
       </div>
     </>
-  )
-  const className = "flex items-center gap-3 rounded-2xl border border-white/60 bg-white/60 p-4 text-left shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl"
+  );
+  const className =
+    "flex items-center gap-3 rounded-2xl border border-white/60 bg-white/60 p-4 text-left shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl";
   return onClick ? (
-    <button type="button" onClick={onClick} className={`${className} cursor-pointer transition-shadow hover:shadow-md`}>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${className} cursor-pointer transition-shadow hover:shadow-md`}
+    >
       {content}
     </button>
   ) : (
     <div className={className}>{content}</div>
-  )
+  );
 }
 
-function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string | null }) {
-  const [name, setName] = useState("")
-  const [size, setSize] = useState("50")
-  const [day, setDay] = useState<number>(2)
-  const [shift, setShift] = useState<Shift>("morning")
-  const [periods, setPeriods] = useState("2")
-  const [error, setError] = useState<string | null>(null)
+function AddClassForm({
+  onAdd,
+}: {
+  onAdd: (cls: Omit<ClassInfo, "id">) => string | null;
+}) {
+  const [name, setName] = useState("");
+  const [size, setSize] = useState("50");
+  const [day, setDay] = useState<number>(2);
+  const [shift, setShift] = useState<Shift>("morning");
+  const [periods, setPeriods] = useState("2");
+  const [error, setError] = useState<string | null>(null);
 
-  const maxPeriods = SHIFT_PERIODS[shift].length
+  const maxPeriods = SHIFT_PERIODS[shift].length;
 
   function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    const parsedSize = Number.parseInt(size, 10)
-    const parsedPeriods = Number.parseInt(periods, 10)
+    e.preventDefault();
+    const parsedSize = Number.parseInt(size, 10);
+    const parsedPeriods = Number.parseInt(periods, 10);
     if (!name.trim()) {
-      setError("Vui lòng nhập tên môn/lớp.")
-      return
+      setError("Vui lòng nhập tên môn/lớp.");
+      return;
     }
     if (!Number.isFinite(parsedSize) || parsedSize <= 0) {
-      setError("Sĩ số phải là số lớn hơn 0.")
-      return
+      setError("Sĩ số phải là số lớn hơn 0.");
+      return;
     }
     const addError = onAdd({
       name: name.trim(),
@@ -831,19 +1113,19 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
       day,
       shift,
       periods: Math.min(Math.max(parsedPeriods || 1, 1), maxPeriods),
-    })
+    });
     if (addError) {
-      setError(addError)
-      return
+      setError(addError);
+      return;
     }
-    setError(null)
-    setName("")
-    setSize("50")
-    setPeriods("2")
+    setError(null);
+    setName("");
+    setSize("50");
+    setPeriods("2");
   }
 
   const inputClass =
-    "w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground shadow-sm outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-ring/40"
+    "w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground shadow-sm outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-ring/40";
 
   return (
     <form
@@ -855,14 +1137,21 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
           <Plus className="size-5" />
         </div>
         <div>
-          <h2 className="text-base font-bold text-foreground">Thêm lớp mới vào thời khóa biểu</h2>
-          <p className="text-xs text-muted-foreground">Nhập thông tin lớp học phần cần bố trí phòng.</p>
+          <h2 className="text-base font-bold text-foreground">
+            Thêm lớp mới vào thời khóa biểu
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Nhập thông tin lớp học phần cần bố trí phòng.
+          </p>
         </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-12">
         <div className="md:col-span-4">
-          <label htmlFor="cls-name" className="mb-1 block text-xs font-semibold text-foreground">
+          <label
+            htmlFor="cls-name"
+            className="mb-1 block text-xs font-semibold text-foreground"
+          >
             Tên lớp / học phần
           </label>
           <input
@@ -875,7 +1164,10 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
         </div>
 
         <div className="md:col-span-2">
-          <label htmlFor="cls-size" className="mb-1 block text-xs font-semibold text-foreground">
+          <label
+            htmlFor="cls-size"
+            className="mb-1 block text-xs font-semibold text-foreground"
+          >
             Sĩ số
           </label>
           <input
@@ -889,10 +1181,18 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
         </div>
 
         <div className="md:col-span-2">
-          <label htmlFor="cls-day" className="mb-1 block text-xs font-semibold text-foreground">
+          <label
+            htmlFor="cls-day"
+            className="mb-1 block text-xs font-semibold text-foreground"
+          >
             Thứ
           </label>
-          <select id="cls-day" value={day} onChange={(e) => setDay(Number(e.target.value))} className={inputClass}>
+          <select
+            id="cls-day"
+            value={day}
+            onChange={(e) => setDay(Number(e.target.value))}
+            className={inputClass}
+          >
             {DAYS.map((d) => (
               <option key={d} value={d}>
                 {DAY_LABELS[d]}
@@ -902,7 +1202,10 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
         </div>
 
         <div className="md:col-span-2">
-          <label htmlFor="cls-shift" className="mb-1 block text-xs font-semibold text-foreground">
+          <label
+            htmlFor="cls-shift"
+            className="mb-1 block text-xs font-semibold text-foreground"
+          >
             Ca học
           </label>
           <select
@@ -913,14 +1216,18 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
           >
             {SHIFTS.map((s) => (
               <option key={s} value={s}>
-                {SHIFT_LABELS[s]} (tiết {SHIFT_PERIODS[s][0]}–{SHIFT_PERIODS[s][SHIFT_PERIODS[s].length - 1]})
+                {SHIFT_LABELS[s]} (tiết {SHIFT_PERIODS[s][0]}–
+                {SHIFT_PERIODS[s][SHIFT_PERIODS[s].length - 1]})
               </option>
             ))}
           </select>
         </div>
 
         <div className="md:col-span-2">
-          <label htmlFor="cls-periods" className="mb-1 block text-xs font-semibold text-foreground">
+          <label
+            htmlFor="cls-periods"
+            className="mb-1 block text-xs font-semibold text-foreground"
+          >
             Số tiết (tối đa {maxPeriods})
           </label>
           <input
@@ -936,7 +1243,10 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
       </div>
 
       {error && (
-        <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+        <p
+          role="alert"
+          className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"
+        >
           {error}
         </p>
       )}
@@ -951,7 +1261,7 @@ function AddClassForm({ onAdd }: { onAdd: (cls: Omit<ClassInfo, "id">) => string
         </button>
       </div>
     </form>
-  )
+  );
 }
 
 function NewClassesPanel({
@@ -959,42 +1269,60 @@ function NewClassesPanel({
   result,
   onShowAssignment,
 }: {
-  classes: ClassInfo[]
-  result: ScheduleResult
-  onShowAssignment: (assignment: import("@/lib/scheduling").Assignment) => void
+  classes: ClassInfo[];
+  result: ScheduleResult;
+  onShowAssignment: (assignment: import("@/lib/scheduling").Assignment) => void;
 }) {
-  if (classes.length === 0) return null
+  if (classes.length === 0) return null;
 
   return (
-    <section className="rounded-2xl border border-sky-200 bg-sky-50/70 p-5" aria-label="Danh sách lớp mới thêm">
+    <section
+      className="rounded-2xl border border-sky-200 bg-sky-50/70 p-5"
+      aria-label="Danh sách lớp mới thêm"
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white">
             <PlusCircle className="size-4" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-foreground">Lớp mới thêm ({classes.length})</h2>
+            <h2 className="text-base font-bold text-foreground">
+              Lớp mới thêm ({classes.length})
+            </h2>
             <p className="text-xs text-muted-foreground">
-              Lớp đã được thêm vào danh sách. Bấm nút để chạy lại thuật toán phân bổ phòng.
+              Lớp đã được thêm vào danh sách. Bấm nút để chạy lại thuật toán
+              phân bổ phòng.
             </p>
           </div>
         </div>
       </div>
       <ul className="mt-4 grid gap-2 md:grid-cols-2">
         {classes.map((classInfo) => {
-          const assignment = result.assignments.find((item) => item.classId === classInfo.id)
-          const assignedRoom = assignment ? ROOMS.find((room) => room.id === assignment.roomId) : undefined
-          const isAssigned = Boolean(assignment)
+          const assignment = result.assignments.find(
+            (item) => item.classId === classInfo.id,
+          );
+          const assignedRoom = assignment
+            ? ROOMS.find((room) => room.id === assignment.roomId)
+            : undefined;
+          const isAssigned = Boolean(assignment);
           return (
-            <li key={classInfo.id} className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white/70 px-3 py-2.5">
+            <li
+              key={classInfo.id}
+              className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white/70 px-3 py-2.5"
+            >
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-foreground">{classInfo.name}</p>
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {classInfo.name}
+                </p>
                 <p className="text-xs text-muted-foreground">
-                  {classInfo.size} SV · {DAY_SHORT[classInfo.day]} · {SHIFT_LABELS[classInfo.shift]} · {classInfo.periods} tiết
+                  {classInfo.size} SV · {DAY_SHORT[classInfo.day]} ·{" "}
+                  {SHIFT_LABELS[classInfo.shift]} · {classInfo.periods} tiết
                 </p>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                <span className={`rounded-full px-2 py-1 text-xs font-bold ${isAssigned ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                <span
+                  className={`rounded-full px-2 py-1 text-xs font-bold ${isAssigned ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}
+                >
                   {isAssigned ? `Đã xếp ${assignment?.roomId}` : "Chưa xếp"}
                 </span>
                 {assignedRoom?.campus && (
@@ -1013,11 +1341,11 @@ function NewClassesPanel({
                 )}
               </div>
             </li>
-          )
+          );
         })}
       </ul>
     </section>
-  )
+  );
 }
 
 function AssignmentEditor({
@@ -1028,25 +1356,22 @@ function AssignmentEditor({
   onToggle,
   onMove,
 }: {
-  assignment: import("@/lib/scheduling").Assignment
-  classInfo: ClassInfo
-  assignments: import("@/lib/scheduling").Assignment[]
-  open: boolean
-  onToggle: () => void
-  onMove: (classId: string, alt: AltSlot) => void
+  assignment: import("@/lib/scheduling").Assignment;
+  classInfo: ClassInfo;
+  assignments: import("@/lib/scheduling").Assignment[];
+  open: boolean;
+  onToggle: () => void;
+  onMove: (classId: string, alt: AltSlot) => void;
 }) {
-  const alternatives = useMemo(
-    () => {
-      const allSlots = findAlternatives(
-        classInfo,
-        ROOMS,
-        assignments.filter((item) => item.classId !== assignment.classId),
-        500,
-      )
-      return allSlots
-    },
-    [assignment.classId, assignments, classInfo],
-  )
+  const alternatives = useMemo(() => {
+    const allSlots = findAlternatives(
+      classInfo,
+      ROOMS,
+      assignments.filter((item) => item.classId !== assignment.classId),
+      500,
+    );
+    return allSlots;
+  }, [assignment.classId, assignments, classInfo]);
 
   return (
     <div className="mt-3 border-t border-dashed border-border pt-2.5">
@@ -1062,35 +1387,39 @@ function AssignmentEditor({
         <ModalPortal>
           <div
             className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={`edit-schedule-title-${classInfo.id}`}
-          onClick={onToggle}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`edit-schedule-title-${classInfo.id}`}
+            onClick={onToggle}
           >
             <div
               className="flex max-h-[82vh] w-[calc(100vw-2rem)] max-w-[1100px] flex-col overflow-hidden rounded-2xl border border-white/70 bg-background shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4 border-b border-border bg-primary px-5 py-4 text-primary-foreground">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-primary-foreground/75">
-                  Chỉnh sửa lịch phòng
-                </p>
-                <h3 id={`edit-schedule-title-${classInfo.id}`} className="mt-1 text-lg font-bold">
-                  {classInfo.name}
-                </h3>
-                <p className="mt-1 text-xs text-primary-foreground/80">
-                  {classInfo.size} sinh viên · Chọn phòng và lịch ở bất kỳ ngày nào trong tuần
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={onToggle}
-                aria-label="Đóng bảng chọn lịch"
-                className="rounded-lg p-2 text-primary-foreground/80 transition-colors hover:bg-white/15 hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-              >
-                <X className="size-5" />
-              </button>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-primary-foreground/75">
+                    Chỉnh sửa lịch phòng
+                  </p>
+                  <h3
+                    id={`edit-schedule-title-${classInfo.id}`}
+                    className="mt-1 text-lg font-bold"
+                  >
+                    {classInfo.name}
+                  </h3>
+                  <p className="mt-1 text-xs text-primary-foreground/80">
+                    {classInfo.size} sinh viên · Chọn phòng và lịch ở bất kỳ
+                    ngày nào trong tuần
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onToggle}
+                  aria-label="Đóng bảng chọn lịch"
+                  className="rounded-lg p-2 text-primary-foreground/80 transition-colors hover:bg-white/15 hover:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                >
+                  <X className="size-5" />
+                </button>
               </div>
 
               <div className="min-h-0 overflow-auto p-5 sm:p-6">
@@ -1102,7 +1431,10 @@ function AssignmentEditor({
                     Không còn slot phù hợp khác.
                   </p>
                 ) : (
-                  <AlternativeColumns alternatives={alternatives} onSelect={(alt) => onMove(classInfo.id, alt)} />
+                  <AlternativeColumns
+                    alternatives={alternatives}
+                    onSelect={(alt) => onMove(classInfo.id, alt)}
+                  />
                 )}
               </div>
             </div>
@@ -1110,15 +1442,15 @@ function AssignmentEditor({
         </ModalPortal>
       )}
     </div>
-  )
+  );
 }
 
 function AlternativeColumns({
   alternatives,
   onSelect,
 }: {
-  alternatives: AltSlot[]
-  onSelect: (alternative: AltSlot) => void
+  alternatives: AltSlot[];
+  onSelect: (alternative: AltSlot) => void;
 }) {
   const campuses = [
     {
@@ -1131,29 +1463,44 @@ function AlternativeColumns({
       label: "Cơ sở 371 Nguyễn Hoàng Tôn",
       tone: "border-violet-200 bg-violet-50/70 text-violet-800",
     },
-  ]
+  ];
 
   return (
     <div className="grid min-w-[960px] grid-cols-6 gap-3">
       {DAYS.map((day) => {
-        const dayAlternatives = alternatives.filter((alternative) => alternative.day === day)
+        const dayAlternatives = alternatives.filter(
+          (alternative) => alternative.day === day,
+        );
         return (
-          <div key={day} className="min-w-0 rounded-xl border border-border bg-card/70 p-3">
-            <p className="mb-3 border-b border-border pb-2 text-sm font-bold text-foreground">{DAY_LABELS[day]}</p>
+          <div
+            key={day}
+            className="min-w-0 rounded-xl border border-border bg-card/70 p-3"
+          >
+            <p className="mb-3 border-b border-border pb-2 text-sm font-bold text-foreground">
+              {DAY_LABELS[day]}
+            </p>
             {dayAlternatives.length === 0 ? (
-              <p className="py-3 text-xs leading-4 text-muted-foreground">Không có slot phù hợp</p>
+              <p className="py-3 text-xs leading-4 text-muted-foreground">
+                Không có slot phù hợp
+              </p>
             ) : (
               <div className="flex max-h-[52vh] flex-col gap-2 overflow-y-auto pr-1">
                 {campuses.map((group) => {
                   const campusAlternatives = dayAlternatives.filter(
-                    (alternative) => ROOMS.find((room) => room.id === alternative.roomId)?.campus === group.campus,
-                  )
-                  if (campusAlternatives.length === 0) return null
+                    (alternative) =>
+                      ROOMS.find((room) => room.id === alternative.roomId)
+                        ?.campus === group.campus,
+                  );
+                  if (campusAlternatives.length === 0) return null;
                   return (
                     <section key={group.campus} className="space-y-1.5">
-                      <div className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-bold ${group.tone}`}>
+                      <div
+                        className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-bold ${group.tone}`}
+                      >
                         {group.label}
-                        <span className="ml-1 font-medium opacity-75">({campusAlternatives.length} phòng)</span>
+                        <span className="ml-1 font-medium opacity-75">
+                          ({campusAlternatives.length} phòng)
+                        </span>
                       </div>
                       {campusAlternatives.map((alternative, index) => (
                         <button
@@ -1162,56 +1509,65 @@ function AlternativeColumns({
                           onClick={() => onSelect(alternative)}
                           className="w-full rounded-lg border border-primary/20 bg-background px-3 py-2.5 text-left text-xs font-medium text-foreground transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
-                          <span className="font-bold">{alternative.roomId}</span>
+                          <span className="font-bold">
+                            {alternative.roomId}
+                          </span>
                           <span className="block text-muted-foreground">
-                            {SHIFT_LABELS[alternative.shift]} · tiết {alternative.startPeriod}
-                            {alternative.endPeriod !== alternative.startPeriod ? `–${alternative.endPeriod}` : ""}
+                            {SHIFT_LABELS[alternative.shift]} · tiết{" "}
+                            {alternative.startPeriod}
+                            {alternative.endPeriod !== alternative.startPeriod
+                              ? `–${alternative.endPeriod}`
+                              : ""}
                           </span>
                         </button>
                       ))}
                     </section>
-                  )
+                  );
                 })}
               </div>
             )}
           </div>
-        )
+        );
       })}
     </div>
-  )
+  );
 }
 
 function ModalPortal({ children }: { children: React.ReactNode }) {
-  const [mounted, setMounted] = useState(false)
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true)
-    return () => setMounted(false)
-  }, [])
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
 
-  return mounted ? createPortal(children, document.body) : null
+  return mounted ? createPortal(children, document.body) : null;
 }
 
 function UnassignedPanel({
   result,
   onPlace,
 }: {
-  result: ScheduleResult
-  onPlace: (classInfo: ClassInfo, alt: AltSlot) => void
+  result: ScheduleResult;
+  onPlace: (classInfo: ClassInfo, alt: AltSlot) => void;
 }) {
   if (result.unassigned.length === 0) {
     return (
       <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-5">
         <CheckCircle2 className="size-6 shrink-0 text-emerald-600" />
         <p className="text-sm font-semibold text-emerald-800">
-          Tất cả lớp đã được bố trí phòng thành công. Không có lớp nào bị đẩy ra ngoài.
+          Tất cả lớp đã được bố trí phòng thành công. Không có lớp nào bị đẩy ra
+          ngoài.
         </p>
       </div>
-    )
+    );
   }
 
   return (
-    <div id="unassigned-classes" className="scroll-mt-6 rounded-2xl border border-red-200 bg-red-50/60 p-5">
+    <div
+      id="unassigned-classes"
+      className="scroll-mt-6 rounded-2xl border border-red-200 bg-red-50/60 p-5"
+    >
       <div className="mb-4 flex items-center gap-2">
         <AlertTriangle className="size-5 text-red-600" />
         <h3 className="text-base font-bold text-red-800">
@@ -1230,7 +1586,7 @@ function UnassignedPanel({
         ))}
       </ul>
     </div>
-  )
+  );
 }
 
 function UnassignedItem({
@@ -1239,15 +1595,15 @@ function UnassignedItem({
   assignments,
   onPlace,
 }: {
-  classInfo: ClassInfo
-  reason: string
-  assignments: import("@/lib/scheduling").Assignment[]
-  onPlace: (classInfo: ClassInfo, alt: AltSlot) => void
+  classInfo: ClassInfo;
+  reason: string;
+  assignments: import("@/lib/scheduling").Assignment[];
+  onPlace: (classInfo: ClassInfo, alt: AltSlot) => void;
 }) {
-  const [alts, setAlts] = useState<AltSlot[] | null>(null)
+  const [alts, setAlts] = useState<AltSlot[] | null>(null);
 
   function handleFind() {
-    setAlts(findAlternatives(classInfo, ROOMS, assignments, 500))
+    setAlts(findAlternatives(classInfo, ROOMS, assignments, 500));
   }
 
   return (
@@ -1255,12 +1611,15 @@ function UnassignedItem({
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-bold text-foreground">{classInfo.name}</p>
+            <p className="text-sm font-bold text-foreground">
+              {classInfo.name}
+            </p>
             <span className="rounded-md bg-red-500/10 px-2 py-0.5 text-xs font-semibold text-red-700">
               {classInfo.size} SV
             </span>
             <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-              {DAY_SHORT[classInfo.day]} · {SHIFT_LABELS[classInfo.shift]} · {classInfo.periods} tiết
+              {DAY_SHORT[classInfo.day]} · {SHIFT_LABELS[classInfo.shift]} ·{" "}
+              {classInfo.periods} tiết
             </span>
           </div>
           <p className="mt-1 text-xs text-red-700">{reason}</p>
@@ -1279,33 +1638,39 @@ function UnassignedItem({
         <ModalPortal>
           <div
             className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={`unassigned-title-${classInfo.id}`}
-          onClick={() => setAlts(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`unassigned-title-${classInfo.id}`}
+            onClick={() => setAlts(null)}
           >
             <div
               className="flex max-h-[82vh] w-[calc(100vw-2rem)] max-w-[1100px] flex-col overflow-hidden rounded-2xl border border-white/70 bg-background shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4 border-b border-border bg-red-600 px-5 py-4 text-white">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-white/75">Chọn slot thay thế</p>
-                <h3 id={`unassigned-title-${classInfo.id}`} className="mt-1 text-lg font-bold">
-                  {classInfo.name}
-                </h3>
-                <p className="mt-1 text-xs text-white/80">
-                  {classInfo.size} sinh viên · Chọn phòng và lịch ở bất kỳ ngày nào trong tuần
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAlts(null)}
-                aria-label="Đóng bảng chọn slot"
-                className="rounded-lg p-2 text-white/80 transition-colors hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-              >
-                <X className="size-5" />
-              </button>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-white/75">
+                    Chọn slot thay thế
+                  </p>
+                  <h3
+                    id={`unassigned-title-${classInfo.id}`}
+                    className="mt-1 text-lg font-bold"
+                  >
+                    {classInfo.name}
+                  </h3>
+                  <p className="mt-1 text-xs text-white/80">
+                    {classInfo.size} sinh viên · Chọn phòng và lịch ở bất kỳ
+                    ngày nào trong tuần
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAlts(null)}
+                  aria-label="Đóng bảng chọn slot"
+                  className="rounded-lg p-2 text-white/80 transition-colors hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                >
+                  <X className="size-5" />
+                </button>
               </div>
               <div className="min-h-0 overflow-auto p-5 sm:p-6">
                 <p className="mb-3 text-sm font-semibold text-foreground">
@@ -1313,10 +1678,14 @@ function UnassignedItem({
                 </p>
                 {alts.length === 0 ? (
                   <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-                    Không tìm thấy thứ/ca/phòng nào còn trống đủ khả năng cho lớp này trong tuần.
+                    Không tìm thấy thứ/ca/phòng nào còn trống đủ khả năng cho
+                    lớp này trong tuần.
                   </p>
                 ) : (
-                  <AlternativeColumns alternatives={alts} onSelect={(alt) => onPlace(classInfo, alt)} />
+                  <AlternativeColumns
+                    alternatives={alts}
+                    onSelect={(alt) => onPlace(classInfo, alt)}
+                  />
                 )}
               </div>
             </div>
@@ -1324,32 +1693,52 @@ function UnassignedItem({
         </ModalPortal>
       )}
     </li>
-  )
+  );
 }
 
-function ClassListPanel({ classes, onRemove }: { classes: ClassInfo[]; onRemove: (id: string) => void }) {
+function ClassListPanel({
+  classes,
+  onRemove,
+}: {
+  classes: ClassInfo[];
+  onRemove: (id: string) => void;
+}) {
   const grouped = useMemo(() => {
     return DAYS.map((day) => ({
       day,
-      items: classes.filter((c) => c.day === day).sort((a, b) => b.size - a.size),
-    })).filter((g) => g.items.length > 0)
-  }, [classes])
+      items: classes
+        .filter((c) => c.day === day)
+        .sort((a, b) => b.size - a.size),
+    })).filter((g) => g.items.length > 0);
+  }, [classes]);
 
   return (
     <div className="rounded-2xl border border-white/60 bg-white/60 p-5 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl">
       <div className="mb-4 flex items-center gap-2">
         <CalendarDays className="size-5 text-primary" />
-        <h2 className="text-base font-bold text-foreground">Thời khóa biểu hiện tại ({classes.length} lớp)</h2>
+        <h2 className="text-base font-bold text-foreground">
+          Thời khóa biểu hiện tại ({classes.length} lớp)
+        </h2>
       </div>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {grouped.map((g) => (
-          <div key={g.day} className="rounded-xl border border-border bg-card/60 p-3">
-            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{DAY_LABELS[g.day]}</p>
+          <div
+            key={g.day}
+            className="rounded-xl border border-border bg-card/60 p-3"
+          >
+            <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+              {DAY_LABELS[g.day]}
+            </p>
             <ul className="flex flex-col gap-2">
               {g.items.map((c) => (
-                <li key={c.id} className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2.5 py-2">
+                <li
+                  key={c.id}
+                  className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2.5 py-2"
+                >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">{c.name}</p>
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {c.name}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {c.size} SV · {SHIFT_LABELS[c.shift]} · {c.periods} tiết
                     </p>
@@ -1369,5 +1758,5 @@ function ClassListPanel({ classes, onRemove }: { classes: ClassInfo[]; onRemove:
         ))}
       </div>
     </div>
-  )
+  );
 }
