@@ -7,6 +7,7 @@ import {
   Clock3,
   DoorOpen,
   FileText,
+  RefreshCw,
   XCircle,
 } from "lucide-react"
 import {
@@ -34,6 +35,10 @@ export function BorrowHistoryPanel({
       window.removeEventListener("storage", refresh)
     }
   }, [])
+
+  function refreshHistory() {
+    setRequests(loadBorrowRequests())
+  }
 
   const history = useMemo(() => {
     return requests
@@ -73,11 +78,22 @@ export function BorrowHistoryPanel({
               Theo dõi các yêu cầu mượn phòng, trạng thái duyệt và phòng được phân bổ cho từng đơn.
             </p>
           </div>
-          {requesterType && (
-            <span className="rounded-full bg-white/80 px-3 py-1.5 text-xs font-bold text-violet-700">
-              {requesterType}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {requesterType && (
+              <span className="rounded-full bg-white/80 px-3 py-1.5 text-xs font-bold text-violet-700">
+                {requesterType}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={refreshHistory}
+              aria-label="Làm mới lịch sử mượn phòng"
+              className="inline-flex items-center gap-2 rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+            >
+              <RefreshCw className="size-4" />
+              Làm mới
+            </button>
+          </div>
         </div>
       </section>
 

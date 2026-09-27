@@ -19,6 +19,8 @@ import {
 import {
   BORROW_REQUESTS_UPDATED_EVENT,
   DEFAULT_BORROW_REQUESTS,
+  getWeekKey,
+  isBorrowRequestActiveAt,
   isBorrowRequestInWeek,
   loadBorrowRequests,
   saveBorrowRequests,
@@ -33,6 +35,10 @@ import {
   type Shift,
 } from "@/lib/scheduling";
 import { SHEET_ROOMS } from "@/lib/schedule-data";
+import {
+  getCourseMeetingTimelines,
+  isMeetingActiveOnDate,
+} from "@/lib/course-timing";
 
 function periodsOverlap(
   leftStart: number,
@@ -43,6 +49,13 @@ function periodsOverlap(
   return leftStart <= rightEnd && rightStart <= leftEnd;
 }
 
+function dateForWeekDay(weekKey: string, day: number): Date {
+  const date = new Date(`${weekKey}T00:00:00`);
+  const mondayOffset = (1 - date.getDay() + 7) % 7;
+  date.setDate(date.getDate() + mondayOffset + ((day + 5) % 7));
+  return date;
+}
+
 function isRoomFree(
   roomId: string,
   day: number,
@@ -51,6 +64,9 @@ function isRoomFree(
   endPeriod: number,
   snapshot: AllocationSnapshot,
   requests: BorrowRequest[],
+  targetDate: Date,
+  classById: Map<string, AllocationSnapshot["classes"][number]>,
+  timelines: ReturnType<typeof getCourseMeetingTimelines>,
   ignoreRequestId?: string,
 ): boolean {
   return (
@@ -59,6 +75,16 @@ function isRoomFree(
         assignment.roomId !== roomId ||
         assignment.day !== day ||
         assignment.shift !== shift
+      )
+        return false;
+      const classInfo = classById.get(assignment.classId);
+      if (!classInfo) return true;
+      if (
+        !isMeetingActiveOnDate(
+          classInfo,
+          timelines.get(assignment.classId),
+          targetDate,
+        )
       )
         return false;
       return periodsOverlap(
@@ -116,8 +142,21 @@ export function BorrowRoomPanel() {
     };
   }, []);
 
-  const activeRequests = requests.filter((request) =>
-    isBorrowRequestInWeek(request),
+  const activeRequests = requests.filter(
+    (request) =>
+      isBorrowRequestInWeek(request) &&
+      (request.status !== "approved" || isBorrowRequestActiveAt(request)),
+  );
+  const classById = useMemo(
+    () =>
+      new Map(
+        snapshot?.classes.map((classInfo) => [classInfo.id, classInfo]) ?? [],
+      ),
+    [snapshot],
+  );
+  const timelines = useMemo(
+    () => getCourseMeetingTimelines(snapshot?.classes ?? []),
+    [snapshot],
   );
 
   const pendingRequests = activeRequests.filter(
@@ -137,6 +176,9 @@ export function BorrowRoomPanel() {
               request.endPeriod,
               snapshot,
               activeRequests,
+              dateForWeekDay(request.weekKey, request.day),
+              classById,
+              timelines,
               request.id,
             ),
         )
@@ -157,11 +199,14 @@ export function BorrowRoomPanel() {
             SHIFT_PERIODS[shift][SHIFT_PERIODS[shift].length - 1],
             snapshot,
             activeRequests,
+            dateForWeekDay(getWeekKey(), day),
+            classById,
+            timelines,
           ),
         ),
       })),
     );
-  }, [snapshot, activeRequests]);
+  }, [snapshot, activeRequests, classById, timelines]);
 
   function approveRequest(request: BorrowRequest) {
     const roomId = selectedRooms[request.id];

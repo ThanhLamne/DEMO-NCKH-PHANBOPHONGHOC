@@ -1,4 +1,5 @@
 import type { Shift } from "./scheduling"
+import { rangeTime } from "./scheduling"
 
 export type BorrowRequestStatus = "pending" | "approved" | "rejected"
 
@@ -32,8 +33,7 @@ export function getWeekKey(value = new Date()): string {
 }
 
 export function getSchedulingDay(value = new Date()): number {
-  const day = new Date(value).getDay()
-  return day === 0 ? 7 : day + 1
+  return new Date(value).getDay() + 1
 }
 
 export function isBorrowRequestInWeek(
@@ -41,6 +41,39 @@ export function isBorrowRequestInWeek(
   weekKey = getWeekKey(),
 ): boolean {
   return request.weekKey === weekKey
+}
+
+function dateKey(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, "0")
+  const day = String(value.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function borrowDateKey(request: BorrowRequest): string {
+  if (request.borrowDate) return request.borrowDate
+  const weekStart = new Date(`${request.weekKey}T00:00:00`)
+  const dayOffset = request.day - 2
+  weekStart.setDate(weekStart.getDate() + dayOffset)
+  return dateKey(weekStart)
+}
+
+export function isBorrowRequestActiveAt(
+  request: BorrowRequest,
+  value = new Date(),
+): boolean {
+  if (request.status !== "approved" || !request.roomId) return false
+  if (borrowDateKey(request) !== dateKey(value)) return false
+
+  const [start, end] = rangeTime(request.startPeriod, request.endPeriod).split(
+    " - ",
+  )
+  const currentMinutes = value.getHours() * 60 + value.getMinutes()
+  const toMinutes = (time: string) => {
+    const [hours, minutes] = time.split(":").map(Number)
+    return hours * 60 + minutes
+  }
+  return currentMinutes >= toMinutes(start) && currentMinutes < toMinutes(end)
 }
 
 const CURRENT_WEEK_KEY = getWeekKey()

@@ -46,13 +46,17 @@ import {
 } from "@/lib/scheduling";
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
 import {
+  getCourseCredits,
+  getCourseMeetingTimelines,
+} from "@/lib/course-timing";
+import {
   clearAllocationSnapshot,
   loadAllocationSnapshot,
   saveAllocationSnapshot,
 } from "@/lib/allocation-store";
 import {
   BORROW_REQUESTS_UPDATED_EVENT,
-  isBorrowRequestInWeek,
+  isBorrowRequestActiveAt,
   loadBorrowRequests,
   type BorrowRequest,
 } from "@/lib/borrow-store";
@@ -75,6 +79,30 @@ function capacityTone(capacity: number): string {
   if (capacity >= 100) return "bg-primary/10 text-primary";
   if (capacity >= 60) return "bg-sky-500/10 text-sky-700";
   return "bg-emerald-500/10 text-emerald-700";
+}
+
+function formatCourseEnd(courseEndAt?: string): string | null {
+  if (!courseEndAt) return null;
+  return new Intl.DateTimeFormat("vi-VN", {
+    timeZone: "UTC",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(`${courseEndAt}:00Z`));
+}
+
+function getCourseCode(classInfo: ClassInfo): string | undefined {
+  const code = classInfo.courseCode?.replace(/\s+/g, "");
+  return code && /^[A-Z0-9-]+$/.test(code) && /\d/.test(code)
+    ? code
+    : undefined;
+}
+
+function normalizeSearchText(value?: string): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase();
 }
 
 function buildingOrder(building?: string): string {
@@ -116,6 +144,7 @@ export function AdminScheduler() {
     null,
   );
   const [borrowRequests, setBorrowRequests] = useState<BorrowRequest[]>([]);
+  const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
     function clearHighlight(event: MouseEvent) {
@@ -126,6 +155,11 @@ export function AdminScheduler() {
     }
     document.addEventListener("mousedown", clearHighlight);
     return () => document.removeEventListener("mousedown", clearHighlight);
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
@@ -165,16 +199,17 @@ export function AdminScheduler() {
     const map = new Map(ROOMS.map((r) => [r.id, r]));
     return map;
   }, []);
+  const courseTimelines = useMemo(
+    () => getCourseMeetingTimelines(classes),
+    [classes],
+  );
 
   const approvedBorrowRequests = useMemo(
     () =>
       borrowRequests.filter(
-        (request) =>
-          isBorrowRequestInWeek(request) &&
-          request.status === "approved" &&
-          request.roomId,
+        (request) => isBorrowRequestActiveAt(request, now),
       ),
-    [borrowRequests],
+    [borrowRequests, now],
   );
 
   const borrowedClasses = useMemo<ClassInfo[]>(
@@ -372,8 +407,9 @@ export function AdminScheduler() {
   ]);
 
   const searchResults = useMemo(() => {
-    const query = scheduleSearch.trim().toLocaleLowerCase();
+    const query = normalizeSearchText(scheduleSearch).trim();
     if (!result || !query) return [];
+    const queryTerms = query.split(/\s+/).filter(Boolean);
 
     return displayAssignments
       .filter((assignment) => {
@@ -386,16 +422,22 @@ export function AdminScheduler() {
           return false;
         if (selectedBuilding !== "all" && room.building !== selectedBuilding)
           return false;
-        return [
+        const searchableText = [
           cls.name,
           cls.className,
           cls.courseCode,
           cls.cohort,
           cls.section,
+          cls.major,
+          cls.id,
           room.name,
+          room.building,
+          room.campus,
         ]
           .filter(Boolean)
-          .some((value) => value?.toLocaleLowerCase().includes(query));
+          .map((value) => normalizeSearchText(value))
+          .join(" ");
+        return queryTerms.every((term) => searchableText.includes(term));
       })
       .sort((a, b) => a.day - b.day || a.startPeriod - b.startPeriod);
   }, [
@@ -793,7 +835,7 @@ export function AdminScheduler() {
                 className="mb-2 flex items-center gap-2 text-sm font-bold text-foreground"
               >
                 <Search className="size-4 text-primary" />
-                Tìm môn học hoặc tên lớp
+                  Tìm kiếm lớp học
               </label>
               <div className="relative">
                 <input
@@ -801,7 +843,7 @@ export function AdminScheduler() {
                   type="search"
                   value={scheduleSearch}
                   onChange={(event) => setScheduleSearch(event.target.value)}
-                  placeholder="Nhập tên môn học hoặc tên lớp để xem phòng..."
+                  placeholder="Nhập tên môn học, tên lớp hoặc mã học phần..."
                   className="w-full rounded-xl border border-border bg-background px-3 py-2.5 pr-10 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-ring/40"
                 />
                 {scheduleSearch && (
@@ -850,10 +892,26 @@ export function AdminScheduler() {
                                 {room.name}
                               </span>
                             </div>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {DAY_LABELS[assignment.day]} · Ca{" "}
-                              {SHIFT_LABELS[assignment.shift]} · {room.campus}
-                            </p>
+                            <div className="mt-2 grid gap-x-3 gap-y-1 text-xs text-muted-foreground sm:grid-cols-2">
+                              <p>
+                                Mã học phần: {getCourseCode(cls) ?? "Chưa có"}
+                              </p>
+                              <p>
+                                Số tín chỉ: {getCourseCredits(cls) ?? "Chưa có"}
+                              </p>
+                              <p>
+                                Khóa: {cls.cohort ?? "Chưa có"} · Sĩ số: {cls.size}
+                              </p>
+                              <p>
+                                Cơ sở: {room.campus ?? "Chưa có"}
+                              </p>
+                              <p className="sm:col-span-2">
+                                Lịch: {DAY_LABELS[assignment.day]} · Ca{" "}
+                                {SHIFT_LABELS[assignment.shift]} · Tiết{" "}
+                                {assignment.startPeriod}–{assignment.endPeriod} ·{" "}
+                                {rangeTime(assignment.startPeriod, assignment.endPeriod)}
+                              </p>
+                            </div>
                             <button
                               type="button"
                               onClick={() => showAssignment(assignment)}
@@ -931,6 +989,13 @@ export function AdminScheduler() {
                                 {campusItems.map((a) => {
                                   const cls = classById.get(a.classId);
                                   const room = roomById.get(a.roomId);
+                                  const courseCode = cls ? getCourseCode(cls) : undefined;
+                                  const credits = cls ? getCourseCredits(cls) : undefined;
+                                  const expectedCourseEnd = cls
+                                    ? formatCourseEnd(
+                                        courseTimelines.get(cls.id)?.courseEndAt,
+                                      )
+                                    : null;
                                   const isBorrowed =
                                     a.classId.startsWith("borrow-");
                                   if (!cls || !room) return null;
@@ -958,9 +1023,24 @@ export function AdminScheduler() {
                                           <p className="text-pretty text-sm font-semibold leading-tight text-foreground">
                                             {cls.name}
                                           </p>
+                                          {courseCode && (
+                                            <p className="mt-1 text-xs font-semibold text-sky-500">
+                                              {courseCode}
+                                            </p>
+                                          )}
                                           {cls.className && (
                                             <p className="mt-1 break-words text-xs font-medium leading-4 text-muted-foreground">
                                               Lớp: {cls.className}
+                                            </p>
+                                          )}
+                                          {credits !== undefined && (
+                                            <p className="mt-1 text-xs text-muted-foreground">
+                                              {credits} tín chỉ
+                                            </p>
+                                          )}
+                                          {expectedCourseEnd && (
+                                            <p className="mt-1 text-xs text-muted-foreground">
+                                              Dự kiến kết thúc môn: {expectedCourseEnd}
                                             </p>
                                           )}
                                         </div>
@@ -1711,6 +1791,10 @@ function ClassListPanel({
         .sort((a, b) => b.size - a.size),
     })).filter((g) => g.items.length > 0);
   }, [classes]);
+  const courseTimelines = useMemo(
+    () => getCourseMeetingTimelines(classes),
+    [classes],
+  );
 
   return (
     <div className="rounded-2xl border border-white/60 bg-white/60 p-5 shadow-[0_8px_30px_rgb(15,23,42,0.05)] backdrop-blur-xl">
@@ -1730,29 +1814,62 @@ function ClassListPanel({
               {DAY_LABELS[g.day]}
             </p>
             <ul className="flex flex-col gap-2">
-              {g.items.map((c) => (
-                <li
-                  key={c.id}
-                  className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2.5 py-2"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">
-                      {c.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {c.size} SV · {SHIFT_LABELS[c.shift]} · {c.periods} tiết
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onRemove(c.id)}
-                    aria-label={`Xóa lớp ${c.name}`}
-                    className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600"
+              {g.items.map((c) => {
+                const courseCode = getCourseCode(c);
+                const displayClassName = c.className;
+                const credits = getCourseCredits(c);
+                const formattedCourseEnd = formatCourseEnd(
+                  courseTimelines.get(c.id)?.courseEndAt,
+                );
+
+                return (
+                  <li
+                    key={c.id}
+                    className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-2.5 py-2"
                   >
-                    <Trash2 className="size-4" />
-                  </button>
-                </li>
-              ))}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {c.name}
+                      </p>
+                      {(displayClassName || credits !== undefined) && (
+                        <p className="truncate text-xs">
+                          {courseCode && (
+                            <span className="font-semibold text-sky-500">
+                              {courseCode}
+                            </span>
+                          )}
+                          {displayClassName && (
+                            <span className="ml-2 text-muted-foreground">
+                              Lớp: {displayClassName}
+                            </span>
+                          )}
+                          {credits !== undefined && (
+                            <span className="ml-2 text-muted-foreground">
+                              {credits} tín chỉ
+                            </span>
+                          )}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        {c.size} SV · {SHIFT_LABELS[c.shift]} · {c.periods} tiết
+                      </p>
+                      {formattedCourseEnd && (
+                        <p className="mt-1 text-xs text-slate-500">
+                          Dự kiến kết thúc môn: {formattedCourseEnd}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onRemove(c.id)}
+                      aria-label={`Xóa lớp ${c.name}`}
+                      className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}

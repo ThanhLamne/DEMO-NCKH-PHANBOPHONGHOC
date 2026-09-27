@@ -1,7 +1,7 @@
-"use client"
+"use client";
 
-import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   BookOpen,
@@ -15,85 +15,123 @@ import {
   History,
   Home,
   LayoutDashboard,
+  LogOut,
+  Menu,
   Settings,
   ShieldCheck,
   UserRound,
-} from "lucide-react"
-import { ThemeToggle } from "@/components/theme-toggle"
-import { BorrowHistoryPanel } from "@/components/borrow-history-panel"
-import { BorrowRoomPanel } from "@/components/borrow-room-panel"
-import { EquipmentExplorer } from "@/components/equipment-explorer"
-import { LecturerIncidentPanel } from "@/components/lecturer-incident-panel"
-import { RoomManagementPanel } from "@/components/room-management-panel"
-import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data"
-import { autoSchedule } from "@/lib/scheduling"
-import { INCIDENTS_UPDATED_EVENT, loadIncidents } from "@/lib/incident-store"
+} from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { BorrowHistoryPanel } from "@/components/borrow-history-panel";
+import { BorrowRoomPanel } from "@/components/borrow-room-panel";
+import { EquipmentExplorer } from "@/components/equipment-explorer";
+import { LecturerIncidentPanel } from "@/components/lecturer-incident-panel";
 import {
-  BORROW_REQUESTS_UPDATED_EVENT,
-  loadBorrowRequests,
-  type BorrowRequest,
-} from "@/lib/borrow-store"
+  AdminSettingsPanel,
+  AdminStatsPanel,
+} from "@/components/admin-summary-panels";
+import { RoomManagementPanel } from "@/components/room-management-panel";
+import { INCIDENTS_UPDATED_EVENT, loadIncidents } from "@/lib/incident-store";
+import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
+import { autoSchedule } from "@/lib/scheduling";
 
-type AdminPanel = "home" | "scheduler" | "rooms" | "equipment" | "borrow" | "stats" | "settings"
+type AdminPanel =
+  | "home"
+  | "scheduler"
+  | "rooms"
+  | "equipment"
+  | "borrow"
+  | "stats"
+  | "settings";
 
 export function PortalShell({
   role,
   children,
 }: {
-  role: "admin" | "student" | "lecturer"
-  children?: React.ReactNode
+  role: "admin" | "student" | "lecturer";
+  children?: React.ReactNode;
 }) {
-  const isAdmin = role === "admin"
-  const isLecturer = role === "lecturer"
-  const [activePanel, setActivePanel] = useState<AdminPanel>("home")
-  const [activeTab, setActiveTab] = useState<"register" | "history" | "incidents">("register")
-  const [now, setNow] = useState<Date | null>(null)
-  const [borrowRequests, setBorrowRequests] = useState<BorrowRequest[]>([])
-  const [openIncidentCount, setOpenIncidentCount] = useState(0)
+  const isAdmin = role === "admin";
+  const isLecturer = role === "lecturer";
+  const [activePanel, setActivePanel] = useState<AdminPanel>("home");
+  const [adminNavOpen, setAdminNavOpen] = useState(false);
+  const [adminAccountOpen, setAdminAccountOpen] = useState(false);
+  const adminAccountRef = useRef<HTMLDivElement>(null);
+  const [activeTab, setActiveTab] = useState<
+    "register" | "history" | "incidents"
+  >("register");
+  const [openIncidentCount, setOpenIncidentCount] = useState(0);
+  const [now, setNow] = useState<Date | null>(null);
 
   useEffect(() => {
-    if (!isAdmin) return
-    setNow(new Date())
-    const intervalId = window.setInterval(() => setNow(new Date()), 1000)
-    return () => window.clearInterval(intervalId)
-  }, [isAdmin])
+    if (!isAdmin) return;
+    setNow(new Date());
+    const intervalId = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [isAdmin]);
 
   useEffect(() => {
-    if (!isLecturer) return
-    const refreshIncidents = () => setOpenIncidentCount(loadIncidents().filter((incident) => incident.status !== "resolved").length)
-    refreshIncidents()
-    window.addEventListener(INCIDENTS_UPDATED_EVENT, refreshIncidents)
-    window.addEventListener("storage", refreshIncidents)
+    if (!isLecturer) return;
+    const refreshIncidents = () =>
+      setOpenIncidentCount(
+        loadIncidents().filter((incident) => incident.status !== "resolved")
+          .length,
+      );
+    refreshIncidents();
+    window.addEventListener(INCIDENTS_UPDATED_EVENT, refreshIncidents);
+    window.addEventListener("storage", refreshIncidents);
     return () => {
-      window.removeEventListener(INCIDENTS_UPDATED_EVENT, refreshIncidents)
-      window.removeEventListener("storage", refreshIncidents)
-    }
-  }, [isLecturer])
+      window.removeEventListener(INCIDENTS_UPDATED_EVENT, refreshIncidents);
+      window.removeEventListener("storage", refreshIncidents);
+    };
+  }, [isLecturer]);
 
   useEffect(() => {
-    if (!isAdmin) return
-    const refreshBorrowRequests = () => setBorrowRequests(loadBorrowRequests())
-    refreshBorrowRequests()
-    window.addEventListener(BORROW_REQUESTS_UPDATED_EVENT, refreshBorrowRequests)
-    window.addEventListener("storage", refreshBorrowRequests)
-    return () => {
-      window.removeEventListener(BORROW_REQUESTS_UPDATED_EVENT, refreshBorrowRequests)
-      window.removeEventListener("storage", refreshBorrowRequests)
+    if (!adminAccountOpen) return;
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (
+        event.target instanceof Node &&
+        !adminAccountRef.current?.contains(event.target)
+      ) {
+        setAdminAccountOpen(false);
+      }
     }
-  }, [isAdmin])
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setAdminAccountOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [adminAccountOpen]);
 
-  const liveSchedule = useMemo(() => autoSchedule(SHEET_CLASSES, SHEET_ROOMS), [])
-  const formatNumber = (value: number) => new Intl.NumberFormat("vi-VN").format(value)
+  const liveSchedule = useMemo(
+    () => autoSchedule(SHEET_CLASSES, SHEET_ROOMS),
+    [],
+  );
+  const formatNumber = (value: number) =>
+    new Intl.NumberFormat("vi-VN").format(value);
   const currentDate = now
-    ? new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(now)
-    : "Đang cập nhật..."
+    ? new Intl.DateTimeFormat("vi-VN", {
+        weekday: "long",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }).format(now)
+    : "Đang cập nhật...";
   const currentTime = now
-    ? new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(now)
-    : "--:--:--"
-  const totalStudents = SHEET_CLASSES.reduce((sum, item) => sum + item.size, 0)
+    ? new Intl.DateTimeFormat("vi-VN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(now)
+    : "--:--:--";
+  const totalStudents = SHEET_CLASSES.reduce((sum, item) => sum + item.size, 0);
   const allocationRate = SHEET_CLASSES.length
     ? Math.round((liveSchedule.assignments.length / SHEET_CLASSES.length) * 100)
-    : 0
+    : 0;
 
   if (isAdmin) {
     const menuItems = [
@@ -104,14 +142,30 @@ export function PortalShell({
       { key: "borrow", label: "Đăng ký mượn phòng", icon: BookOpen },
       { key: "stats", label: "Thống kê", icon: LayoutDashboard },
       { key: "settings", label: "Cài đặt", icon: Settings },
-    ] as const
+    ] as const;
 
     const statCards = [
-      { label: "Phòng học thực tế", value: formatNumber(SHEET_ROOMS.length), color: "bg-[#EAF4FF] text-[#2A6FD8]" },
-      { label: "Lớp trong TKB", value: formatNumber(SHEET_CLASSES.length), color: "bg-[#EAFBF4] text-[#1AA56C]" },
-      { label: "Tổng sĩ số TKB", value: formatNumber(totalStudents), color: "bg-[#F4ECFF] text-[#8157D6]" },
-      { label: "Tỷ lệ đã phân phòng", value: `${allocationRate}%`, color: "bg-[#EAF9F6] text-[#0FAF9F]" },
-    ]
+      {
+        label: "Phòng học thực tế",
+        value: formatNumber(SHEET_ROOMS.length),
+        color: "bg-[#EAF4FF] text-[#2A6FD8]",
+      },
+      {
+        label: "Lớp trong TKB",
+        value: formatNumber(SHEET_CLASSES.length),
+        color: "bg-[#EAFBF4] text-[#1AA56C]",
+      },
+      {
+        label: "Tổng sĩ số TKB",
+        value: formatNumber(totalStudents),
+        color: "bg-[#F4ECFF] text-[#8157D6]",
+      },
+      {
+        label: "Tỷ lệ đã phân phòng",
+        value: `${allocationRate}%`,
+        color: "bg-[#EAF9F6] text-[#0FAF9F]",
+      },
+    ];
 
     const functionCards = [
       {
@@ -156,32 +210,52 @@ export function PortalShell({
         icon: Settings,
         tone: "bg-[#EEF2F8] text-[#5D6B82]",
       },
-    ] as const
+    ] as const;
 
-    const notifications = borrowRequests
-      .filter((request) => request.status === "pending")
-      .slice(-4)
-      .reverse()
-      .map((request) => ({
-        text: `${request.requester} (${request.requesterType}) gửi phiếu mượn${request.courseName ? ` môn ${request.courseName}` : " phòng"}`,
-        time: request.borrowDate ?? "Đang chờ duyệt",
+    const notifications = [
+      {
+        text: "Đã có lịch phân bổ phòng học kỳ I năm 2026",
+        time: "2 giờ trước",
+        type: "dot-blue",
+      },
+      {
+        text: "Yêu cầu mượn phòng số 12 đã được duyệt",
+        time: "4 giờ trước",
+        type: "dot-green",
+      },
+      {
+        text: "Cập nhật danh sách phòng học mới",
+        time: "1 ngày trước",
         type: "dot-orange",
-      }))
+      },
+      {
+        text: "Báo trì thiết bị phòng học trừ 25/09",
+        time: "1 ngày trước",
+        type: "dot-slate",
+      },
+    ];
 
     const renderHome = () => (
       <div className="rounded-[28px] border border-slate-200 bg-[#f6fafb] p-6 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
         <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-[2.2rem] font-bold tracking-tight text-slate-800">Xin chào, Admin!</h2>
+            <h2 className="text-[2.2rem] font-bold tracking-tight text-slate-800">
+              Xin chào, Admin!
+            </h2>
             <p className="mt-3 max-w-[760px] text-[15px] leading-6 text-slate-500">
-              Chào mừng bạn đến với hệ thống phân bổ phòng học học APAG. Cùng quản lý và sắp xếp phòng học hiệu quả.
+              Chào mừng bạn đến với hệ thống phân bổ phòng học học APAG. Cùng
+              quản lý và sắp xếp phòng học hiệu quả.
             </p>
           </div>
 
           <div className="flex min-w-[320px] items-center justify-between rounded-[22px] border border-sky-100 bg-[#eaf5ff] p-4 shadow-inner shadow-white/20">
             <div>
-              <div className="text-[13px] font-medium capitalize text-slate-500">{currentDate}</div>
-              <div className="mt-2 text-[2.2rem] font-bold tracking-tight tabular-nums text-slate-800">{currentTime}</div>
+              <div className="text-[13px] font-medium capitalize text-slate-500">
+                {currentDate}
+              </div>
+              <div className="mt-2 text-[2.2rem] font-bold tracking-tight tabular-nums text-slate-800">
+                {currentTime}
+              </div>
             </div>
             <div className="relative h-[92px] w-[190px] overflow-hidden rounded-[18px] bg-gradient-to-br from-[#ebf6ff] via-[#dff2ff] to-[#d9f4ea]">
               <div className="absolute inset-x-0 bottom-0 h-10 bg-[#d9f0db]" />
@@ -189,13 +263,17 @@ export function PortalShell({
               <div className="absolute left-8 top-5 h-6 w-10 rounded-[8px] bg-[#cfe7ff]" />
               <div className="absolute right-10 top-5 h-8 w-12 rounded-[8px] bg-[#d3edff]" />
               <div className="absolute inset-x-0 bottom-0 h-8 bg-[#b8e6b8] opacity-80" />
-              <div className="absolute right-3 top-3 rounded-full bg-[#dff5ff] px-2 py-1 text-[10px] font-bold tracking-wide text-sky-700">APAG</div>
+              <div className="absolute right-3 top-3 rounded-full bg-[#dff5ff] px-2 py-1 text-[10px] font-bold tracking-wide text-sky-700">
+                APAG
+              </div>
             </div>
           </div>
         </div>
 
         <section className="mb-8">
-          <h3 className="mb-4 text-[15px] font-bold uppercase tracking-[0.02em] text-slate-700">Chức năng chính</h3>
+          <h3 className="mb-4 text-[15px] font-bold uppercase tracking-[0.02em] text-slate-700">
+            Chức năng chính
+          </h3>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {functionCards.map(({ key, title, desc, icon: Icon, tone }) => (
               <button
@@ -205,15 +283,23 @@ export function PortalShell({
                 className="group flex items-center justify-between rounded-[22px] border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
               >
                 <div className="flex items-center gap-4">
-                  <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${tone}`}>
+                  <div
+                    className={`flex h-12 w-12 items-center justify-center rounded-xl ${tone}`}
+                  >
                     <Icon className="h-6 w-6" />
                   </div>
                   <div>
-                    <div className="text-[15px] font-semibold text-slate-800">{title}</div>
-                    <div className="mt-1 max-w-[220px] text-sm leading-5 text-slate-500">{desc}</div>
+                    <div className="text-[15px] font-semibold text-slate-800">
+                      {title}
+                    </div>
+                    <div className="mt-1 max-w-[220px] text-sm leading-5 text-slate-500">
+                      {desc}
+                    </div>
                   </div>
                 </div>
-                <span className="text-xl text-slate-400 transition group-hover:translate-x-1">›</span>
+                <span className="text-xl text-slate-400 transition group-hover:translate-x-1">
+                  ›
+                </span>
               </button>
             ))}
           </div>
@@ -222,16 +308,25 @@ export function PortalShell({
         <section className="grid gap-6 xl:grid-cols-[1.7fr_1fr]">
           <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-[18px] font-bold text-slate-800">Tổng quan hệ thống</h3>
+              <h3 className="text-[18px] font-bold text-slate-800">
+                Tổng quan hệ thống
+              </h3>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {statCards.map(({ label, value, color }) => (
-                <div key={label} className="rounded-[18px] border border-slate-200 bg-slate-50 p-4">
-                  <div className={`mb-3 flex h-12 w-12 items-center justify-center rounded-xl ${color}`}>
+                <div
+                  key={label}
+                  className="rounded-[18px] border border-slate-200 bg-slate-50 p-4"
+                >
+                  <div
+                    className={`mb-3 flex h-12 w-12 items-center justify-center rounded-xl ${color}`}
+                  >
                     <Grid2x2 className="h-5 w-5" />
                   </div>
-                  <div className="text-[2rem] font-bold tracking-tight text-slate-800">{value}</div>
+                  <div className="text-[2rem] font-bold tracking-tight text-slate-800">
+                    {value}
+                  </div>
                   <div className="mt-1 text-sm text-slate-500">{label}</div>
                 </div>
               ))}
@@ -240,19 +335,23 @@ export function PortalShell({
 
           <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-[18px] font-bold text-slate-800">Thông báo</h3>
-              <button type="button" className="text-sm font-medium text-slate-500 hover:text-slate-700">
+              <h3 className="text-[18px] font-bold text-slate-800">
+                Thông báo
+              </h3>
+              <button
+                type="button"
+                className="text-sm font-medium text-slate-500 hover:text-slate-700"
+              >
                 Xem tất cả →
               </button>
             </div>
 
             <ul className="space-y-3">
-              {notifications.length === 0 ? (
-                <li className="rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">
-                  Chưa có phiếu mượn phòng mới cần xử lý.
-                </li>
-              ) : notifications.map(({ text, time, type }, index) => (
-                <li key={`${text}-${index}`} className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
+              {notifications.map(({ text, time, type }) => (
+                <li
+                  key={text}
+                  className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-2.5"
+                >
                   <span
                     className={[
                       "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
@@ -265,7 +364,9 @@ export function PortalShell({
                       .join(" ")}
                   />
                   <div className="flex-1">
-                    <div className="text-[14px] leading-5 text-slate-700">{text}</div>
+                    <div className="text-[14px] leading-5 text-slate-700">
+                      {text}
+                    </div>
                     <div className="mt-1 text-xs text-slate-400">{time}</div>
                   </div>
                 </li>
@@ -274,17 +375,32 @@ export function PortalShell({
           </div>
         </section>
       </div>
-    )
+    );
 
     return (
       <div className="min-h-screen bg-[#edf4f6] text-slate-800">
-        <div className="flex min-h-screen">
-          <aside className="w-[260px] border-r border-slate-200 bg-white/80 px-5 py-6 shadow-sm backdrop-blur-sm">
+        <div className="relative flex min-h-screen">
+          {adminNavOpen && (
+            <button
+              type="button"
+              aria-label="Đóng menu"
+              onClick={() => setAdminNavOpen(false)}
+              className="fixed inset-0 z-30 bg-slate-950/30 lg:hidden"
+            />
+          )}
+          <aside
+            id="admin-navigation"
+            aria-hidden={!adminNavOpen}
+            inert={!adminNavOpen}
+            className={`fixed inset-y-0 left-0 z-40 w-[260px] overflow-y-auto border-r border-slate-200 bg-white/95 px-5 py-6 shadow-sm backdrop-blur-sm transition-transform duration-300 ease-in-out lg:relative lg:inset-auto lg:z-auto lg:shrink-0 lg:overflow-hidden lg:transition-[width] ${adminNavOpen ? "translate-x-0 lg:w-[260px]" : "-translate-x-full lg:w-0"}`}
+          >
             <div className="mb-8 flex items-center gap-3 px-2">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#eaf6ff] text-[#1a7ad9]">
                 <Building2 className="h-6 w-6" />
               </div>
-              <div className="text-[2.1rem] font-black tracking-tight text-[#1789d9]">APAG</div>
+              <div className="text-[2.1rem] font-black tracking-tight text-[#1789d9]">
+                APAG
+              </div>
             </div>
 
             <nav className="space-y-2">
@@ -307,34 +423,95 @@ export function PortalShell({
             </nav>
           </aside>
 
-          <main className="flex-1">
-            <header className="flex h-[82px] items-center justify-end border-b border-slate-200 bg-white/80 px-6 backdrop-blur-sm">
+          <main className="min-w-0 flex-1">
+            <header className="flex h-[82px] items-center justify-between border-b border-slate-200 bg-white/80 px-6 backdrop-blur-sm">
+              <button
+                type="button"
+                onClick={() => setAdminNavOpen((open) => !open)}
+                aria-label={adminNavOpen ? "Thu gọn menu" : "Mở menu"}
+                aria-expanded={adminNavOpen}
+                aria-controls="admin-navigation"
+                title={adminNavOpen ? "Thu gọn menu" : "Mở menu"}
+                className="flex size-10 items-center justify-center rounded-lg text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1789d9]"
+              >
+                <Menu className="size-5" />
+              </button>
               <div className="flex items-center gap-4">
-                <button type="button" aria-label="Thông báo" className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200">
+                <button
+                  type="button"
+                  aria-label="Thông báo"
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200"
+                >
                   <Bell className="h-5 w-5" />
                 </button>
 
-                <div className="flex items-center gap-3 rounded-full border border-slate-200 bg-white px-2 py-1.5 shadow-sm">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#eaf4ff] text-[#1a7ad9]">
-                    <UserRound className="h-5 w-5" />
-                  </div>
-                  <span className="text-base font-semibold text-slate-700">Admin</span>
-                  <ChevronDown className="h-4 w-4 text-slate-500" />
+                <div ref={adminAccountRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setAdminAccountOpen((open) => !open)}
+                    aria-label="Menu tài khoản Admin"
+                    aria-haspopup="menu"
+                    aria-expanded={adminAccountOpen}
+                    aria-controls="admin-account-menu"
+                    className="flex items-center gap-3 rounded-full border border-slate-200 bg-white px-2 py-1.5 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1789d9]"
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#eaf4ff] text-[#1a7ad9]">
+                      <UserRound className="h-5 w-5" />
+                    </span>
+                    <span className="text-base font-semibold text-slate-700">
+                      Admin
+                    </span>
+                    <ChevronDown
+                      className={`h-4 w-4 text-slate-500 transition-transform ${adminAccountOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {adminAccountOpen && (
+                    <div
+                      id="admin-account-menu"
+                      role="menu"
+                      aria-label="Tùy chọn tài khoản Admin"
+                      className="absolute right-0 top-full z-50 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
+                    >
+                      <Link
+                        href="/"
+                        role="menuitem"
+                        onClick={() => setAdminAccountOpen(false)}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-red-50 hover:text-red-700 focus-visible:bg-red-50 focus-visible:outline-none"
+                      >
+                        <LogOut className="size-4" />
+                        Đăng xuất
+                      </Link>
+                    </div>
+                  )}
                 </div>
               </div>
             </header>
 
             <div className="p-6">
-              {activePanel === "home" ? renderHome() : activePanel === "borrow" ? <BorrowRoomPanel /> : activePanel === "rooms" ? <RoomManagementPanel /> : activePanel === "equipment" ? <EquipmentExplorer /> : activePanel === "scheduler" ? (
+              {activePanel === "home" ? (
+                renderHome()
+              ) : activePanel === "borrow" ? (
+                <BorrowRoomPanel />
+              ) : activePanel === "rooms" ? (
+                <RoomManagementPanel />
+              ) : activePanel === "equipment" ? (
+                <EquipmentExplorer />
+              ) : activePanel === "stats" ? (
+                <AdminStatsPanel />
+              ) : activePanel === "settings" ? (
+                <AdminSettingsPanel />
+              ) : activePanel === "scheduler" ? (
                 <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)]">
                   {children}
                 </div>
-              ) : <div className="min-h-[520px] rounded-[28px] bg-white" />}
+              ) : (
+                <div className="min-h-[520px] rounded-[28px] bg-white" />
+              )}
             </div>
           </main>
         </div>
       </div>
-    )
+    );
   }
 
   return (
@@ -342,7 +519,10 @@ export function PortalShell({
       <div className="mx-auto max-w-7xl px-4 py-6 md:px-8 md:py-10">
         <header className="flex flex-col gap-4 rounded-2xl border border-white/60 bg-white/60 p-5 shadow-[0_8px_30px_rgb(15,23,42,0.06)] backdrop-blur-xl md:p-6">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <Link href="/" className="flex items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Link
+              href="/"
+              className="flex items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
                 <Building2 className="size-6" />
               </div>
@@ -357,7 +537,11 @@ export function PortalShell({
             </Link>
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">
-                {isAdmin ? "Khu vực quản trị" : isLecturer ? "Cổng giảng viên" : "Khu vực sinh viên"}
+                {isAdmin
+                  ? "Khu vực quản trị"
+                  : isLecturer
+                    ? "Cổng giảng viên"
+                    : "Khu vực sinh viên"}
               </span>
               <ThemeToggle />
             </div>
@@ -371,7 +555,9 @@ export function PortalShell({
                   onClick={() => setActiveTab("register")}
                   icon={<DoorOpen className="size-4" />}
                 >
-                  {isLecturer ? "Đăng ký mượn phòng" : "Tra cứu &amp; mượn phòng"}
+                  {isLecturer
+                    ? "Đăng ký mượn phòng"
+                    : "Tra cứu &amp; mượn phòng"}
                 </PortalLink>
                 <PortalLink
                   active={activeTab === "history"}
@@ -396,7 +582,11 @@ export function PortalShell({
                 )}
               </>
             ) : (
-              <PortalLink href="/admin" active icon={<ShieldCheck className="size-4" />}>
+              <PortalLink
+                href="/admin"
+                active
+                icon={<ShieldCheck className="size-4" />}
+              >
                 Phân bổ phòng học
               </PortalLink>
             )}
@@ -407,7 +597,9 @@ export function PortalShell({
           {isAdmin ? (
             children
           ) : activeTab === "history" ? (
-            <BorrowHistoryPanel requesterType={isLecturer ? "Giảng viên" : "Sinh viên"} />
+            <BorrowHistoryPanel
+              requesterType={isLecturer ? "Giảng viên" : "Sinh viên"}
+            />
           ) : activeTab === "incidents" && isLecturer ? (
             <LecturerIncidentPanel />
           ) : (
@@ -416,7 +608,7 @@ export function PortalShell({
         </main>
       </div>
     </div>
-  )
+  );
 }
 
 function PortalLink({
@@ -426,18 +618,18 @@ function PortalLink({
   children,
   onClick,
 }: {
-  href?: string
-  active: boolean
-  icon: React.ReactNode
-  children: React.ReactNode
-  onClick?: () => void
+  href?: string;
+  active: boolean;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  onClick?: () => void;
 }) {
   const className = [
     "flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all",
     active
       ? "border-primary bg-primary text-primary-foreground shadow-sm"
       : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-accent",
-  ].join(" ")
+  ].join(" ");
 
   if (onClick) {
     return (
@@ -445,13 +637,17 @@ function PortalLink({
         {icon}
         {children}
       </button>
-    )
+    );
   }
 
   return (
-    <Link href={href ?? "/"} aria-current={active ? "page" : undefined} className={className}>
+    <Link
+      href={href ?? "/"}
+      aria-current={active ? "page" : undefined}
+      className={className}
+    >
       {icon}
       {children}
     </Link>
-  )
+  );
 }

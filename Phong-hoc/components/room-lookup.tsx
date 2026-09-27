@@ -27,6 +27,12 @@ import {
 } from "@/lib/scheduling";
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
 import {
+  getCourseMeetingTimelines,
+  isMeetingActiveOnDate,
+  meetingEndTimeOnDate,
+  type CourseMeetingTimeline,
+} from "@/lib/course-timing";
+import {
   ALLOCATION_UPDATED_EVENT,
   loadAllocationSnapshot,
   type AllocationSnapshot,
@@ -35,14 +41,21 @@ import {
   BORROW_REQUESTS_UPDATED_EVENT,
   addBorrowRequest,
   getSchedulingDay,
-  isBorrowRequestInWeek,
+  isBorrowRequestActiveAt,
   loadBorrowRequests,
   type BorrowRequest,
 } from "@/lib/borrow-store";
 
 type RoomStatus = "available" | "in-class" | "booked";
 
-type ClassBlock = { day: number; start: string; end: string; name: string };
+type ClassBlock = {
+  day: number;
+  start: string;
+  end: string;
+  name: string;
+  classInfo: (typeof SHEET_CLASSES)[number];
+  timeline: CourseMeetingTimeline | null | undefined;
+};
 
 type RoomBase = {
   id: string;
@@ -107,11 +120,14 @@ function createRoomSchedules(
     : autoSchedule(classes, SHEET_ROOMS);
   const classById = new Map(classes.map((item) => [item.id, item]));
   const roomById = new Map(SHEET_ROOMS.map((item) => [item.id, item]));
+  const timelines = getCourseMeetingTimelines(classes);
   const blocksByRoom = new Map<string, ClassBlock[]>();
 
   for (const assignment of result.assignments) {
     const cls = classById.get(assignment.classId);
     if (!cls) continue;
+    const timeline = timelines.get(cls.id);
+    if (timeline === null) continue;
     const blocks = blocksByRoom.get(assignment.roomId) ?? [];
     blocks.push({
       day: assignment.day,
@@ -122,6 +138,8 @@ function createRoomSchedules(
         " - ",
       )[1],
       name: cls.name,
+      classInfo: cls,
+      timeline,
     });
     blocksByRoom.set(assignment.roomId, blocks);
   }
@@ -178,6 +196,7 @@ function computeRoomView(
   base: RoomBase,
   nowMin: number,
   nowDay: number,
+  nowDate: Date,
   booking?: Booking,
 ): RoomView {
   // Lượt mượn tạm còn hiệu lực -> ưu tiên hiển thị "đang mượn".
@@ -190,15 +209,17 @@ function computeRoomView(
       status: "booked",
       borrower: booking.borrower,
       bookedUntil: booking.until,
-      nextClass: nextClassAfter(base, nowMin, nowDay),
+      nextClass: nextClassAfter(base, nowMin, nowDay, nowDate),
     };
   }
 
   const current = base.blocks.find(
     (b) =>
       b.day === nowDay &&
+      isMeetingActiveOnDate(b.classInfo, b.timeline, nowDate) &&
       nowMin >= toMinutes(b.start) &&
-      nowMin < toMinutes(b.end),
+      nowMin <
+        toMinutes(meetingEndTimeOnDate(b.timeline, nowDate, b.end)),
   );
   if (current) {
     return {
@@ -208,8 +229,8 @@ function computeRoomView(
       campus: base.campus,
       status: "in-class",
       className: current.name,
-      classEnd: current.end,
-      nextClass: nextClassAfter(base, nowMin, nowDay),
+      classEnd: meetingEndTimeOnDate(current.timeline, nowDate, current.end),
+      nextClass: nextClassAfter(base, nowMin, nowDay, nowDate),
     };
   }
 
@@ -219,29 +240,17 @@ function computeRoomView(
     building: base.building,
     campus: base.campus,
     status: "available",
-    nextClass: nextClassAfter(base, nowMin, nowDay),
+    nextClass: nextClassAfter(base, nowMin, nowDay, nowDate),
   };
 }
 
 function approvedBookingAtNow(
   requests: BorrowRequest[],
   roomId: string,
-  nowDay: number,
-  nowMin: number,
+  now: Date,
 ): BorrowRequest | undefined {
   return requests.find((request) => {
-    if (
-      !isBorrowRequestInWeek(request) ||
-      request.status !== "approved" ||
-      request.roomId !== roomId ||
-      request.day !== nowDay
-    )
-      return false;
-    const [start, end] = rangeTime(
-      request.startPeriod,
-      request.endPeriod,
-    ).split(" - ");
-    return nowMin >= toMinutes(start) && nowMin < toMinutes(end);
+    return request.roomId === roomId && isBorrowRequestActiveAt(request, now);
   });
 }
 
@@ -249,9 +258,15 @@ function nextClassAfter(
   base: RoomBase,
   nowMin: number,
   nowDay: number,
+  nowDate: Date,
 ): string | null {
   const upcoming = base.blocks
-    .filter((b) => b.day === nowDay && toMinutes(b.start) > nowMin)
+    .filter(
+      (b) =>
+        b.day === nowDay &&
+        isMeetingActiveOnDate(b.classInfo, b.timeline, nowDate) &&
+        toMinutes(b.start) > nowMin,
+    )
     .sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
   return upcoming[0]?.start ?? null;
 }
@@ -346,8 +361,7 @@ export function RoomLookup() {
         const approved = approvedBookingAtNow(
           borrowRequests,
           room.id,
-          nowDay,
-          nowMin,
+          now ?? new Date(),
         );
         const booking =
           bookings[room.id] ??
@@ -360,7 +374,7 @@ export function RoomLookup() {
                 borrower: approved.requester,
               }
             : undefined);
-        return computeRoomView(room, nowMin, nowDay, booking);
+        return computeRoomView(room, nowMin, nowDay, now ?? new Date(), booking);
       }),
     [schedules, nowMin, nowDay, bookings, borrowRequests],
   );
