@@ -2,6 +2,7 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   Wand2,
   Plus,
@@ -51,7 +52,10 @@ import {
 } from "@/lib/course-timing";
 import {
   clearAllocationSnapshot,
+  clearImportedClasses,
+  loadImportedClasses,
   loadAllocationSnapshot,
+  saveImportedClasses,
   saveAllocationSnapshot,
 } from "@/lib/allocation-store";
 import {
@@ -62,6 +66,182 @@ import {
 } from "@/lib/borrow-store";
 
 const ROOMS = SHEET_ROOMS;
+
+type ImportPreviewRow = {
+  rowNumber: number;
+  values: Record<string, string | number>;
+  classInfo?: Omit<ClassInfo, "id">;
+  errors: string[];
+};
+
+type ImportState = {
+  fileName: string;
+  rows: ImportPreviewRow[];
+  classes: ClassInfo[];
+  errors: string[];
+};
+
+const IMPORT_COLUMNS = {
+  name: ["tenmon", "monhoc", "tenlop", "hocphan", "subject", "name"],
+  size: ["siso", "soluong", "soluongsinhvien", "size", "capacity"],
+  day: ["thu", "ngayhoc", "day"],
+  shift: ["ca", "cahoc", "shift"],
+  periods: ["sotiet", "sotiet hoc", "periods", "duration"],
+  startPeriod: ["tietbatdau", "tietbd", "startperiod"],
+  endPeriod: ["tietketthuc", "tietkt", "endperiod"],
+  cohort: ["khoa", "khoahoc", "cohort"],
+  courseCode: ["mamon", "magv", "coursecode", "code"],
+  major: ["nganh", "major"],
+  className: ["malop", "tenlop", "classname", "class"],
+  section: ["nhom", "section"],
+} as const;
+
+function normalizeImportHeader(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function importValue(
+  row: Record<string, unknown>,
+  aliases: readonly string[],
+): unknown {
+  const key = Object.keys(row).find((item) =>
+    aliases.includes(normalizeImportHeader(item)),
+  );
+  return key ? row[key] : undefined;
+}
+
+function numericImportValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(String(value ?? "").replace(",", ".").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseImportedRows(rows: Record<string, unknown>[]): {
+  previews: ImportPreviewRow[];
+  classes: ClassInfo[];
+  errors: string[];
+} {
+  const previews: ImportPreviewRow[] = [];
+  const classes: ClassInfo[] = [];
+  const errors: string[] = [];
+  const seenNames = new Set<string>();
+  const validShifts = new Set<Shift>(SHIFTS);
+  const shiftAliases: Record<string, Shift> = {
+    sang: "morning",
+    morning: "morning",
+    chieu: "afternoon",
+    afternoon: "afternoon",
+    toi: "evening",
+    evening: "evening",
+  };
+
+  rows.forEach((row, index) => {
+    const rowErrors: string[] = [];
+    const name = String(importValue(row, IMPORT_COLUMNS.name) ?? "").trim();
+    const size = numericImportValue(importValue(row, IMPORT_COLUMNS.size));
+    const day = numericImportValue(importValue(row, IMPORT_COLUMNS.day));
+    const periods = numericImportValue(
+      importValue(row, IMPORT_COLUMNS.periods),
+    );
+    const rawShift = normalizeImportHeader(
+      importValue(row, IMPORT_COLUMNS.shift),
+    );
+    const shift = shiftAliases[rawShift];
+    const startPeriod = numericImportValue(
+      importValue(row, IMPORT_COLUMNS.startPeriod),
+    );
+    const endPeriod = numericImportValue(
+      importValue(row, IMPORT_COLUMNS.endPeriod),
+    );
+    const normalizedName = name.toLocaleLowerCase();
+
+    if (!name) rowErrors.push("Thiếu tên môn/lớp");
+    if (size === null || size <= 0 || !Number.isInteger(size))
+      rowErrors.push("Sĩ số phải là số nguyên dương");
+    if (day === null || !DAYS.includes(day as (typeof DAYS)[number]))
+      rowErrors.push("Thứ phải từ 2 đến 7");
+    if (!shift || !validShifts.has(shift))
+      rowErrors.push("Ca học không hợp lệ (Sáng/Chiều/Tối)");
+    if (
+      periods === null ||
+      periods < 1 ||
+      !Number.isInteger(periods) ||
+      periods > SHIFT_PERIODS[shift ?? "morning"].length
+    )
+      rowErrors.push("Số tiết không hợp lệ");
+    if (
+      (startPeriod !== null && (startPeriod < 1 || startPeriod > 13)) ||
+      (endPeriod !== null && (endPeriod < 1 || endPeriod > 13)) ||
+      (startPeriod !== null &&
+        endPeriod !== null &&
+        endPeriod - startPeriod + 1 !== periods)
+    )
+      rowErrors.push("Khoảng tiết bắt đầu/kết thúc không hợp lệ");
+    if (seenNames.has(normalizedName)) rowErrors.push("Trùng môn/lớp trong file");
+    if (name) seenNames.add(normalizedName);
+
+    const classInfo =
+      rowErrors.length === 0
+        ? {
+            name,
+            size: size!,
+            day: day!,
+            shift: shift!,
+            periods: periods!,
+            ...(startPeriod !== null ? { startPeriod } : {}),
+            ...(endPeriod !== null ? { endPeriod } : {}),
+            ...(String(importValue(row, IMPORT_COLUMNS.cohort) ?? "").trim()
+              ? {
+                  cohort: String(
+                    importValue(row, IMPORT_COLUMNS.cohort),
+                  ).trim() as ClassInfo["cohort"],
+                }
+              : {}),
+            ...(String(importValue(row, IMPORT_COLUMNS.courseCode) ?? "").trim()
+              ? {
+                  courseCode: String(
+                    importValue(row, IMPORT_COLUMNS.courseCode),
+                  ).trim(),
+                }
+              : {}),
+            ...(String(importValue(row, IMPORT_COLUMNS.major) ?? "").trim()
+              ? { major: String(importValue(row, IMPORT_COLUMNS.major)).trim() }
+              : {}),
+            ...(String(importValue(row, IMPORT_COLUMNS.className) ?? "").trim()
+              ? {
+                  className: String(
+                    importValue(row, IMPORT_COLUMNS.className),
+                  ).trim(),
+                }
+              : {}),
+            ...(String(importValue(row, IMPORT_COLUMNS.section) ?? "").trim()
+              ? {
+                  section: String(
+                    importValue(row, IMPORT_COLUMNS.section),
+                  ).trim(),
+                }
+              : {}),
+          }
+        : undefined;
+    const preview: ImportPreviewRow = {
+      rowNumber: index + 2,
+      values: Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, String(value ?? "")]),
+      ),
+      classInfo,
+      errors: rowErrors,
+    };
+    previews.push(preview);
+    if (classInfo) classes.push({ ...classInfo, id: `import-${index + 1}` });
+    if (rowErrors.length) errors.push(`Dòng ${index + 2}: ${rowErrors.join(", ")}`);
+  });
+
+  return { previews, classes, errors };
+}
 
 const SHIFT_ICON: Record<Shift, React.ReactNode> = {
   morning: <Sun className="size-4" />,
@@ -133,6 +313,8 @@ const CAMPUS_SCHEDULE_GROUPS = [
 export function AdminScheduler() {
   const [classes, setClasses] = useState<ClassInfo[]>(SHEET_CLASSES);
   const [result, setResult] = useState<ScheduleResult | null>(null);
+  const [importState, setImportState] = useState<ImportState | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number>(2);
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [newClassIds, setNewClassIds] = useState<string[]>([]);
@@ -180,6 +362,8 @@ export function AdminScheduler() {
   }, []);
 
   useEffect(() => {
+    const importedClasses = loadImportedClasses();
+    if (importedClasses) setClasses(importedClasses);
     const snapshot = loadAllocationSnapshot();
     if (!snapshot) return;
     setClasses(snapshot.classes);
@@ -258,6 +442,61 @@ export function AdminScheduler() {
     setResult(autoSchedule(classes, ROOMS));
   }
 
+  async function handleImportFile(file: File | undefined) {
+    if (!file) return;
+    if (!file.name.toLocaleLowerCase().endsWith(".xlsx")) {
+      setImportState({
+        fileName: file.name,
+        rows: [],
+        classes: [],
+        errors: ["Chỉ hỗ trợ file Excel định dạng .xlsx"],
+      });
+      return;
+    }
+    setIsImporting(true);
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0] ?? ""];
+      if (!firstSheet) throw new Error("File không có trang tính nào.");
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
+        firstSheet,
+        { defval: "" },
+      );
+      if (!rows.length) throw new Error("Trang tính không có dữ liệu.");
+      const parsed = parseImportedRows(rows);
+      setImportState({
+        fileName: file.name,
+        rows: parsed.previews,
+        classes: parsed.classes,
+        errors: parsed.errors,
+      });
+    } catch (error) {
+      setImportState({
+        fileName: file.name,
+        rows: [],
+        classes: [],
+        errors: [
+          error instanceof Error
+            ? `Không thể đọc file: ${error.message}`
+            : "Không thể đọc file Excel.",
+        ],
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  function handleConfirmImport() {
+    if (!importState || importState.errors.length || !importState.classes.length)
+      return;
+    saveImportedClasses(importState.classes);
+    clearAllocationSnapshot();
+    setClasses(importState.classes);
+    setResult(null);
+    setNewClassIds(importState.classes.map((item) => item.id));
+    setImportState(null);
+  }
+
   function handleAddClass(cls: Omit<ClassInfo, "id">): string | null {
     const normalizedName = cls.name.trim().toLocaleLowerCase();
     if (
@@ -297,6 +536,7 @@ export function AdminScheduler() {
     setClasses(SHEET_CLASSES);
     setResult(null);
     clearAllocationSnapshot();
+    clearImportedClasses();
     setEditingClassId(null);
     setNewClassIds([]);
   }
@@ -501,6 +741,127 @@ export function AdminScheduler() {
 
   return (
     <div className="space-y-6">
+      <section className="rounded-2xl border border-blue-100 bg-blue-50/50 p-5 shadow-[0_8px_30px_rgb(15,23,42,0.05)]">
+        <div className="mb-4 flex items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+            <CalendarDays className="size-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-foreground">
+              Tải thời khóa biểu Excel
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Chọn học kỳ, năm học và file .xlsx để kiểm tra trước khi lưu lớp.
+              Cột bắt buộc: Tên môn/lớp, Sĩ số, Thứ, Ca học, Số tiết.
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-[150px_150px_minmax(0,1fr)_auto] md:items-end">
+          <label className="text-xs font-semibold text-muted-foreground">
+            Học kỳ
+            <select
+              defaultValue="1"
+              className="mt-1.5 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground"
+            >
+              <option value="1">Học kỳ I</option>
+              <option value="2">Học kỳ II</option>
+              <option value="3">Học kỳ hè</option>
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-muted-foreground">
+            Năm học
+            <select
+              defaultValue="2025-2026"
+              className="mt-1.5 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground"
+            >
+              <option>2025-2026</option>
+              <option>2026-2027</option>
+              <option>2027-2028</option>
+            </select>
+          </label>
+          <label className="text-xs font-semibold text-muted-foreground">
+            File thời khóa biểu
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              disabled={isImporting}
+              onChange={(event) => handleImportFile(event.target.files?.[0])}
+              className="mt-1.5 block w-full cursor-pointer rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-blue-700"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={isImporting}
+            onClick={() => document.querySelector<HTMLInputElement>('input[type="file"]')?.click()}
+            className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+          >
+            {isImporting ? "Đang đọc..." : "Tải lên & Kiểm tra"}
+          </button>
+        </div>
+
+        {importState && (
+          <div className="mt-5 overflow-hidden rounded-xl border border-border bg-card">
+            <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-bold text-foreground">
+                  Xem trước: {importState.fileName}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {importState.rows.length} dòng · {importState.classes.length} dòng hợp lệ
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={Boolean(importState.errors.length) || !importState.classes.length}
+                onClick={handleConfirmImport}
+                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Xác nhận import
+              </button>
+            </div>
+            {importState.errors.length > 0 && (
+              <div className="border-b border-red-100 bg-red-50 p-4">
+                <p className="mb-2 flex items-center gap-2 text-sm font-bold text-red-700">
+                  <AlertTriangle className="size-4" /> Danh sách lỗi ({importState.errors.length})
+                </p>
+                <ul className="max-h-32 space-y-1 overflow-auto text-xs text-red-700">
+                  {importState.errors.map((error) => <li key={error}>• {error}</li>)}
+                </ul>
+              </div>
+            )}
+            {importState.rows.length > 0 && (
+              <div className="max-h-72 overflow-auto">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-100 text-[11px] uppercase text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2">Dòng</th>
+                      <th className="px-3 py-2">Môn/lớp</th>
+                      <th className="px-3 py-2">Sĩ số</th>
+                      <th className="px-3 py-2">Thứ</th>
+                      <th className="px-3 py-2">Ca</th>
+                      <th className="px-3 py-2">Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {importState.rows.map((row) => (
+                      <tr key={row.rowNumber} className={row.errors.length ? "bg-red-50/70" : ""}>
+                        <td className="px-3 py-2 text-muted-foreground">{row.rowNumber}</td>
+                        <td className="px-3 py-2 font-medium">{String(row.values[Object.keys(row.values)[0]] ?? row.classInfo?.name ?? "—")}</td>
+                        <td className="px-3 py-2">{row.classInfo?.size ?? "—"}</td>
+                        <td className="px-3 py-2">{row.classInfo?.day ?? "—"}</td>
+                        <td className="px-3 py-2">{row.classInfo?.shift ? SHIFT_LABELS[row.classInfo.shift] : "—"}</td>
+                        <td className={`px-3 py-2 font-semibold ${row.errors.length ? "text-red-600" : "text-emerald-600"}`}>
+                          {row.errors.length ? row.errors.join("; ") : "Hợp lệ"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
       <AddClassForm onAdd={handleAddClass} />
 
       <section

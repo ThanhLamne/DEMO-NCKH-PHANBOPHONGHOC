@@ -63,6 +63,11 @@ export function PortalShell({
   const [openIncidentCount, setOpenIncidentCount] = useState(0);
   const [now, setNow] = useState<Date | null>(null);
 
+  function handleLogout() {
+    window.sessionStorage.removeItem(`apag-auth-session-${role}`);
+    window.location.href = "/";
+  }
+
   useEffect(() => {
     if (!isAdmin) return;
     setNow(new Date());
@@ -472,15 +477,15 @@ export function PortalShell({
                       aria-label="Tùy chọn tài khoản Admin"
                       className="absolute right-0 top-full z-50 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
                     >
-                      <Link
-                        href="/"
+                      <button
+                        type="button"
                         role="menuitem"
-                        onClick={() => setAdminAccountOpen(false)}
+                        onClick={handleLogout}
                         className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-red-50 hover:text-red-700 focus-visible:bg-red-50 focus-visible:outline-none"
                       >
                         <LogOut className="size-4" />
                         Đăng xuất
-                      </Link>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -544,6 +549,14 @@ export function PortalShell({
                     : "Khu vực sinh viên"}
               </span>
               <ThemeToggle />
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+              >
+                <LogOut className="size-4" />
+                Đăng xuất
+              </button>
             </div>
           </div>
 
