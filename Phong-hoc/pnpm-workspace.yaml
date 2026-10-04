@@ -1,3 +1,5 @@
+allowBuilds:
+  tesseract.js: true
 minimumReleaseAgeExclude:
   - '@next/*'
   - next
