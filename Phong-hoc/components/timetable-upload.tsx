@@ -53,6 +53,9 @@ export function TimetableUpload({
   }
 
   function importClasses() {
+    const incompleteCount = classes.filter(
+      (classInfo) => classInfo.needsReview?.length,
+    ).length
     const summary = onImport(classes)
     const importedNames = new Set(summary.duplicates)
     setClasses((current) =>
@@ -70,7 +73,7 @@ export function TimetableUpload({
     }
     setNotice(
       summary.added > 0
-        ? `Đã thêm ${summary.added} lớp vào thời khóa biểu. Lớp mới được giữ ở trạng thái chờ xếp nếu lịch đã chốt.`
+        ? `Đã thêm ${summary.added} lớp vào thời khóa biểu. Lớp mới được giữ ở trạng thái chờ xếp nếu lịch đã chốt.${incompleteCount > 0 ? ` ${incompleteCount} lớp còn thiếu thông tin nên sẽ chưa được xếp phòng.` : ""}`
         : "Không có lớp mới được thêm; các lớp đọc được đều đã tồn tại.",
     )
   }
@@ -92,8 +95,8 @@ export function TimetableUpload({
               trước khi thêm vào lịch.
             </p>
             <p className="mt-2 text-[11px] leading-5 text-slate-500">
-              Nên có tiêu đề cột: Tên môn học, Mã lớp (không bắt buộc), Sĩ số,
-              Thứ, Ca, Tiết hoặc Tiết bắt đầu/Tiết kết thúc. Ảnh/PDF scan cần
+              Nên có tiêu đề cột: Tên môn học, Mã lớp (không bắt buộc), Sĩ số
+              (có thể để trống), Thứ, Ca, Tiết hoặc Từ/Đến. Ảnh/PDF scan cần
               rõ nét; OCR có thể cần kiểm tra lại.
             </p>
           </div>
@@ -166,7 +169,8 @@ export function TimetableUpload({
                 Bản xem trước: {classes.length} lớp đọc được
               </h3>
               <p className="text-xs text-slate-600">
-                Kiểm tra tên lớp, sĩ số, thứ, ca và tiết trước khi nhập.
+                Lớp thiếu thông tin vẫn được nhập nhưng chưa thể xếp phòng cho
+                đến khi bổ sung đủ dữ liệu.
               </p>
             </div>
             <button
@@ -198,10 +202,15 @@ export function TimetableUpload({
                         .filter(Boolean)
                         .join(" · ") || "—"}
                     </td>
-                    <td className="px-3 py-2.5">{classInfo.size}</td>
                     <td className="px-3 py-2.5">
-                      {DAY_LABELS[classInfo.day]} · {SHIFT_LABELS[classInfo.shift]} ·
-                      {" "}tiết {classInfo.startPeriod}–{classInfo.endPeriod}
+                      {classInfo.size > 0 ? classInfo.size : (
+                        <span className="font-semibold text-amber-700">Chưa nhập</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {classInfo.needsReview?.some((field) => field !== "sĩ số")
+                        ? `Thiếu ${classInfo.needsReview.filter((field) => field !== "sĩ số").join(", ")}`
+                        : `${DAY_LABELS[classInfo.day]} · ${SHIFT_LABELS[classInfo.shift]} · tiết ${classInfo.startPeriod}–${classInfo.endPeriod}`}
                     </td>
                     <td className="px-3 py-2.5">
                       <button
@@ -222,6 +231,13 @@ export function TimetableUpload({
               </tbody>
             </table>
           </div>
+          {classes.some((classInfo) => classInfo.needsReview?.length) && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              {classes.filter((classInfo) => classInfo.needsReview?.length).length} lớp
+              còn thiếu thông tin. Các lớp này vẫn được lưu vào hệ thống nhưng
+              sẽ ở trạng thái chưa xếp phòng để tránh chọn nhầm phòng/lịch.
+            </p>
+          )}
         </div>
       )}
 

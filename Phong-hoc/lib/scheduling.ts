@@ -17,6 +17,8 @@ export type ClassInfo = {
   name: string
   /** Sĩ số */
   size: number
+  /** Các trường cần bổ sung trước khi phân bổ phòng. */
+  needsReview?: string[]
   /** Thứ trong tuần: 2 = Thứ Hai ... 7 = Thứ Bảy */
   day: number
   /** Ca học */
@@ -301,6 +303,14 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
   const unassigned: Unassigned[] = []
 
   for (const cls of sorted) {
+    if (cls.size < 1 || cls.needsReview?.length) {
+      unassigned.push({
+        classInfo: cls,
+        reason: `Chưa thể xếp phòng cho ${cls.name}: cần bổ sung ${cls.needsReview?.join(", ") || "sĩ số"} trước.`,
+      })
+      continue
+    }
+
     const eligibleRooms = roomsByCapAsc.filter((room) => cls.size >= 150 || !isHallRoom(room))
     const hasFixedPeriods =
       Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
@@ -421,6 +431,8 @@ export function findIncrementalAssignment(
   rooms: RoomInfo[],
   assignments: Assignment[],
 ): Assignment | null {
+  if (cls.size < 1 || cls.needsReview?.length) return null
+
   const hasFixedPeriods =
     Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
   const alternatives = hasFixedPeriods
@@ -519,7 +531,10 @@ export function schedulePendingClasses(
     if (!assignment) {
       unassigned.push({
         classInfo,
-        reason: `Không còn khung giờ/phòng trống phù hợp cho ${classInfo.name}. Các lịch đã phân trước đó được giữ nguyên.`,
+        reason:
+          classInfo.size < 1 || classInfo.needsReview?.length
+            ? `Chưa thể xếp phòng cho ${classInfo.name}: cần bổ sung ${classInfo.needsReview?.join(", ") || "sĩ số"} trước.`
+            : `Không còn khung giờ/phòng trống phù hợp cho ${classInfo.name}. Các lịch đã phân trước đó được giữ nguyên.`,
       })
       continue
     }
@@ -600,6 +615,8 @@ export function findAlternatives(
   assignments: Assignment[],
   limit = 6,
 ): AltSlot[] {
+  if (cls.size < 1 || cls.needsReview?.length) return []
+
   const occupancy = buildOccupancy(assignments)
   const candidateRooms = [...rooms]
     .filter((room) => cls.size >= 150 || !isHallRoom(room))

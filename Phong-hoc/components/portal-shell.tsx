@@ -15,7 +15,6 @@ import {
   History,
   Home,
   LayoutDashboard,
-  LogOut,
   Menu,
   Settings,
   ShieldCheck,
@@ -35,6 +34,7 @@ import { RoomManagementPanel } from "@/components/room-management-panel";
 import { INCIDENTS_UPDATED_EVENT, loadIncidents } from "@/lib/incident-store";
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
 import { autoSchedule } from "@/lib/scheduling";
+import { SignOutButton } from "@/components/sign-out-button";
 
 type AdminPanel =
   | "home"
@@ -63,11 +63,6 @@ export function PortalShell({
   >("register");
   const [openIncidentCount, setOpenIncidentCount] = useState(0);
   const [now, setNow] = useState<Date | null>(null);
-
-  function handleLogout() {
-    window.sessionStorage.removeItem(`apag-auth-session-${role}`);
-    window.location.href = "/";
-  }
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -478,15 +473,10 @@ export function PortalShell({
                       aria-label="Tùy chọn tài khoản Admin"
                       className="absolute right-0 top-full z-50 mt-2 w-48 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
                     >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={handleLogout}
-                        className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-red-50 hover:text-red-700 focus-visible:bg-red-50 focus-visible:outline-none"
-                      >
-                        <LogOut className="size-4" />
-                        Đăng xuất
-                      </button>
+                      <SignOutButton
+                        menuItem
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition hover:bg-red-50 hover:text-red-700 focus-visible:bg-red-50 focus-visible:outline-none"
+                      />
                     </div>
                   )}
                 </div>
@@ -550,14 +540,7 @@ export function PortalShell({
                     : "Khu vực sinh viên"}
               </span>
               <ThemeToggle />
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700"
-              >
-                <LogOut className="size-4" />
-                Đăng xuất
-              </button>
+              <SignOutButton className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700" />
             </div>
           </div>
 

@@ -1,13 +1,15 @@
 import { BorrowRequestForm } from "@/components/borrow-request-form"
 import { PortalShell } from "@/components/portal-shell"
-import { AuthGate } from "@/components/auth-gate"
+import { PortalAuth } from "@/components/portal-auth"
+
+export const dynamic = "force-dynamic"
 
 export default function StudentPage() {
   return (
-    <AuthGate role="student">
+    <PortalAuth role="student">
       <PortalShell role="student">
         <BorrowRequestForm requesterType="Sinh viên" />
       </PortalShell>
-    </AuthGate>
+    </PortalAuth>
   )
 }

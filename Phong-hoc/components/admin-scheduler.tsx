@@ -582,7 +582,9 @@ export function AdminScheduler() {
               ...accepted.map((classInfo) => ({
                 classInfo,
                 reason:
-                  "Lớp mới nhập đang chờ xếp. Bấm “Sắp xếp tự động” để tìm phòng và tiết còn trống.",
+                  classInfo.size < 1 || classInfo.needsReview?.length
+                    ? `Chưa thể xếp phòng cho lớp này: cần bổ sung ${classInfo.needsReview?.join(", ") || "sĩ số"} trước.`
+                    : "Lớp mới nhập đang chờ xếp. Bấm “Sắp xếp tự động” để tìm phòng và tiết còn trống.",
               })),
             ],
           }
@@ -612,6 +614,8 @@ export function AdminScheduler() {
 
   // Xếp thủ công 1 lớp bị đẩy ra ngoài vào phòng đủ điều kiện đã chọn.
   function handlePlaceClass(cls: ClassInfo, alt: AltSlot) {
+    if (cls.size < 1 || cls.needsReview?.length) return;
+
     const updatedAssignment = {
       classId: cls.id,
       roomId: alt.roomId,
@@ -1768,8 +1772,10 @@ function NewClassesPanel({
                   {classInfo.name}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {classInfo.size} SV · {DAY_SHORT[classInfo.day]} ·{" "}
-                  {SHIFT_LABELS[classInfo.shift]} · {classInfo.periods} tiết
+                  {classInfo.size > 0 ? `${classInfo.size} SV` : "Chưa nhập sĩ số"} ·{" "}
+                  {classInfo.needsReview?.some((field) => field !== "sĩ số")
+                    ? `Cần bổ sung ${classInfo.needsReview.filter((field) => field !== "sĩ số").join(", ")}`
+                    : `${DAY_SHORT[classInfo.day]} · ${SHIFT_LABELS[classInfo.shift]} · ${classInfo.periods} tiết`}
                 </p>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
@@ -2068,11 +2074,12 @@ function UnassignedItem({
               {classInfo.name}
             </p>
             <span className="rounded-md bg-red-500/10 px-2 py-0.5 text-xs font-semibold text-red-700">
-              {classInfo.size} SV
+              {classInfo.size > 0 ? `${classInfo.size} SV` : "Chưa nhập sĩ số"}
             </span>
             <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-              {DAY_SHORT[classInfo.day]} · {SHIFT_LABELS[classInfo.shift]} ·{" "}
-              {classInfo.periods} tiết
+              {classInfo.needsReview?.some((field) => field !== "sĩ số")
+                ? `Cần bổ sung ${classInfo.needsReview.filter((field) => field !== "sĩ số").join(", ")}`
+                : `${DAY_SHORT[classInfo.day]} · ${SHIFT_LABELS[classInfo.shift]} · ${classInfo.periods} tiết`}
             </span>
           </div>
           <p className="mt-1 text-xs text-red-700">{reason}</p>
@@ -2080,10 +2087,13 @@ function UnassignedItem({
         <button
           type="button"
           onClick={handleFind}
+          disabled={classInfo.size < 1 || Boolean(classInfo.needsReview?.length)}
           className="flex shrink-0 items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <Sparkles className="size-4" />
-          Tìm slot thay thế
+          {classInfo.size < 1 || classInfo.needsReview?.length
+            ? "Cần bổ sung sĩ số"
+            : "Tìm slot thay thế"}
         </button>
       </div>
 

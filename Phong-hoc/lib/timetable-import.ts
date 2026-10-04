@@ -100,6 +100,8 @@ function columnFor(header: string): ColumnName | null {
   if (/^(tiet|tiet hoc|period|periods)$/.test(value)) return "period"
   if (/^(tiet bat dau|tiet bd|start period|period start)$/.test(value)) return "startPeriod"
   if (/^(tiet ket thuc|tiet kt|end period|period end)$/.test(value)) return "endPeriod"
+  if (/^(tu|from)$/.test(value)) return "startPeriod"
+  if (/^(den|to)$/.test(value)) return "endPeriod"
   if (/^(khoa|khoa hoc|cohort|year)$/.test(value)) return "cohort"
   if (/^(nganh|major|department)$/.test(value)) return "major"
   return null
@@ -156,8 +158,10 @@ function mapRow(
   const get = (column: ColumnName) => row[columns.get(column) ?? -1] ?? ""
   const name = get("name").trim() || get("className").trim()
   const day = parseDay(get("day"))
-  const shift = parseShift(get("shift"))
-  const size = Number(get("size").replace(/[^\d]/g, ""))
+  const parsedShift = parseShift(get("shift"))
+  const sizeText = get("size").trim()
+  const parsedSize = Number(sizeText.replace(/[^\d]/g, ""))
+  const size = Number.isInteger(parsedSize) && parsedSize > 0 ? parsedSize : 0
   const explicitStart = periodRange(get("startPeriod"))
   const explicitEnd = periodRange(get("endPeriod"))
   const period = periodRange(get("period"))
@@ -166,15 +170,32 @@ function mapRow(
   const hasPeriodDefinition = Boolean(requestedPeriods || explicitStart || explicitEnd || period)
   const raw = row.filter(Boolean).join(" | ")
 
-  if (!name || day === null || !shift || !Number.isInteger(size) || size < 1 || !hasPeriodDefinition) {
+  if (!name) {
     return {
       issue: {
         row: rowNumber,
         source: raw,
-        message: "Thiếu tên môn/lớp, thứ, ca, sĩ số hoặc số tiết hợp lệ.",
+        message: "Không nhận dạng được tên môn/lớp.",
       },
     }
   }
+
+  const periodHint = explicitStart?.[0] ?? explicitEnd?.[0] ?? period?.[0]
+  const inferredShift: Shift | null = periodHint
+    ? periodHint >= 11 && periodHint <= 13
+      ? "evening"
+      : periodHint >= 6 && periodHint <= 10
+        ? "afternoon"
+        : periodHint >= 1 && periodHint <= 5
+          ? "morning"
+          : null
+    : null
+  const shift = parsedShift ?? inferredShift ?? "morning"
+  const needsReview: string[] = []
+  if (size === 0) needsReview.push("sĩ số")
+  if (day === null) needsReview.push("thứ")
+  if (!parsedShift && !inferredShift) needsReview.push("ca học")
+  if (!hasPeriodDefinition) needsReview.push("tiết học")
 
   const allowedPeriods: Record<Shift, [number, number]> = {
     morning: [1, 5],
@@ -182,39 +203,40 @@ function mapRow(
     evening: [11, 13],
   }
   const [minPeriod, maxPeriod] = allowedPeriods[shift]
-  const normalizedStart =
+  const candidateStart =
     explicitStart?.[0] ??
     explicitEnd?.[0] ??
     period?.[0] ??
     minPeriod
-  const normalizedEnd =
+  const candidateEnd =
     explicitEnd?.[1] ??
     explicitStart?.[1] ??
     period?.[1] ??
-    normalizedStart + (requestedPeriods ?? 1) - 1
+    candidateStart + (requestedPeriods ?? 1) - 1
+  const validPeriodRange =
+    hasPeriodDefinition &&
+    candidateStart >= minPeriod &&
+    candidateEnd <= maxPeriod &&
+    candidateEnd >= candidateStart
+  if (hasPeriodDefinition && !validPeriodRange) needsReview.push("tiết học")
+  const normalizedStart = validPeriodRange ? candidateStart : minPeriod
+  const normalizedEnd = validPeriodRange
+    ? candidateEnd
+    : minPeriod +
+      (requestedPeriods && requestedPeriods <= maxPeriod - minPeriod + 1
+        ? requestedPeriods
+        : 1) -
+      1
   const periods = normalizedEnd - normalizedStart + 1
-  if (
-    normalizedStart < minPeriod ||
-    normalizedEnd > maxPeriod ||
-    normalizedEnd < normalizedStart
-  ) {
-    return {
-      issue: {
-        row: rowNumber,
-        source: raw,
-        message: "Tiết học không hợp lệ hoặc nằm ngoài ca đã chọn.",
-      },
-    }
-  }
 
   const classInfo: ImportedClass = {
     name,
     size,
-    day,
+    day: day ?? 2,
     shift,
-    periods: normalizedEnd - normalizedStart + 1,
+    periods,
   }
-  if (explicitStart || explicitEnd || period) {
+  if (validPeriodRange && (explicitStart || explicitEnd || period)) {
     classInfo.startPeriod = normalizedStart
     classInfo.endPeriod = normalizedEnd
   }
@@ -226,6 +248,7 @@ function mapRow(
   if (courseCode) classInfo.courseCode = courseCode
   if (/^K2[3-6]$/.test(cohort)) classInfo.cohort = cohort as ImportedClass["cohort"]
   if (major) classInfo.major = major
+  if (needsReview.length > 0) classInfo.needsReview = needsReview
   return { classInfo }
 }
 
@@ -248,12 +271,12 @@ function parseLooseLine(line: string, rowNumber: number): { classInfo?: Imported
     line.match(/(?:tiet|periods?)\s*(\d+)/i)
   const sizeMatch = line.match(/(\d+)\s*(?:sv|sinh vien|students?)\b/i)
 
-  if (!dayMatch || !shiftMatch || !periodMatch || !sizeMatch) {
+  if (!dayMatch || !shiftMatch || !periodMatch) {
     return {
       issue: {
         row: rowNumber,
         source: line,
-        message: "Không nhận dạng đủ thứ, ca, tiết và sĩ số trong dòng này.",
+        message: "Không nhận dạng đủ thứ, ca và tiết trong dòng này.",
       },
     }
   }
@@ -262,7 +285,7 @@ function parseLooseLine(line: string, rowNumber: number): { classInfo?: Imported
     .replace(dayMatch[0], " ")
     .replace(shiftMatch[0], " ")
     .replace(periodMatch[0], " ")
-    .replace(sizeMatch[0], " ")
+    .replace(sizeMatch?.[0] ?? "", " ")
     .replace(/\b(?:lop|class)\s*[:#-]?\s*[\w.-]+\b/i, " ")
     .replace(/\b(?:K2[3-6]|[A-Z]{1,4}\d{2,})\b/g, " ")
     .replace(/[|,;]+/g, " ")
@@ -285,7 +308,7 @@ function parseLooseLine(line: string, rowNumber: number): { classInfo?: Imported
   }
 
   const mapped = mapRow(
-    [name, String(Number(sizeMatch[1])), String(day), shift, `${startPeriod}-${endPeriod}`],
+    [name, sizeMatch ? String(Number(sizeMatch[1])) : "", String(day), shift, `${startPeriod}-${endPeriod}`],
     new Map([
       ["name", 0],
       ["size", 1],
