@@ -26,6 +26,7 @@ import { BorrowHistoryPanel } from "@/components/borrow-history-panel";
 import { BorrowRoomPanel } from "@/components/borrow-room-panel";
 import { EquipmentExplorer } from "@/components/equipment-explorer";
 import { LecturerIncidentPanel } from "@/components/lecturer-incident-panel";
+import { LecturerLookupPanel } from "@/components/lecturer-lookup-panel";
 import {
   AdminSettingsPanel,
   AdminStatsPanel,
@@ -58,7 +59,7 @@ export function PortalShell({
   const [adminAccountOpen, setAdminAccountOpen] = useState(false);
   const adminAccountRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<
-    "register" | "history" | "incidents"
+    "register" | "lookup" | "history" | "incidents"
   >("register");
   const [openIncidentCount, setOpenIncidentCount] = useState(0);
   const [now, setNow] = useState<Date | null>(null);
@@ -572,6 +573,15 @@ export function PortalShell({
                     ? "Đăng ký mượn phòng"
                     : "Tra cứu &amp; mượn phòng"}
                 </PortalLink>
+                {isLecturer && (
+                  <PortalLink
+                    active={activeTab === "lookup"}
+                    onClick={() => setActiveTab("lookup")}
+                    icon={<BookOpen className="size-4" />}
+                  >
+                    Tra cứu
+                  </PortalLink>
+                )}
                 <PortalLink
                   active={activeTab === "history"}
                   onClick={() => setActiveTab("history")}
@@ -609,6 +619,8 @@ export function PortalShell({
         <main className="mt-6">
           {isAdmin ? (
             children
+          ) : activeTab === "lookup" && isLecturer ? (
+            <LecturerLookupPanel />
           ) : activeTab === "history" ? (
             <BorrowHistoryPanel
               requesterType={isLecturer ? "Giảng viên" : "Sinh viên"}

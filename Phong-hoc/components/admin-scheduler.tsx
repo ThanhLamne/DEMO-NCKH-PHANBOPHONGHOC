@@ -42,10 +42,12 @@ import {
   rangeTime,
   CAMPUS_LABELS,
   COHORT_LABELS,
-  addClassIncrementally,
   removeClassFromSchedule,
+  schedulePendingClasses,
 } from "@/lib/scheduling";
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
+import { TimetableUpload } from "@/components/timetable-upload";
+import type { ImportedClass } from "@/lib/timetable-import";
 import {
   getCourseCredits,
   getCourseMeetingTimelines,
@@ -438,8 +440,11 @@ export function AdminScheduler() {
   );
 
   function handleSchedule() {
-    if (result) return;
-    setResult(autoSchedule(classes, ROOMS));
+    setResult((current) =>
+      current
+        ? schedulePendingClasses(classes, ROOMS, current)
+        : autoSchedule(classes, ROOMS),
+    );
   }
 
   async function handleImportFile(file: File | undefined) {
@@ -514,13 +519,77 @@ export function AdminScheduler() {
     const newClass = { ...cls, id: newClassId };
     const nextClasses = [...classes, newClass];
     setClasses(nextClasses);
-    setResult(
-      result
-        ? addClassIncrementally(newClass, ROOMS, result)
+    setResult((current) =>
+      current
+        ? {
+            ...current,
+            unassigned: [
+              ...current.unassigned.filter(
+                (item) => item.classInfo.id !== newClass.id,
+              ),
+              {
+                classInfo: newClass,
+                reason:
+                  "Lớp mới đang chờ xếp. Bấm “Sắp xếp tự động” để tìm phòng và tiết còn trống; các lịch đã xếp sẽ được giữ nguyên.",
+              },
+            ],
+          }
         : autoSchedule(nextClasses, ROOMS),
     );
     setNewClassIds((prev) => [...prev, newClass.id]);
     return null;
+  }
+
+  function handleImportClasses(importedClasses: ImportedClass[]) {
+    const existingNames = new Set(
+      classes.map((item) => item.name.trim().toLocaleLowerCase()),
+    );
+    const accepted: ClassInfo[] = [];
+    const duplicates: string[] = [];
+
+    for (const importedClass of importedClasses) {
+      const normalizedName = importedClass.name.trim().toLocaleLowerCase();
+      if (existingNames.has(normalizedName)) {
+        duplicates.push(importedClass.name);
+        continue;
+      }
+
+      existingNames.add(normalizedName);
+      let id = createClassId();
+      while (
+        classes.some((item) => item.id === id) ||
+        accepted.some((item) => item.id === id)
+      ) {
+        id = createClassId();
+      }
+      accepted.push({ ...importedClass, id });
+    }
+
+    if (accepted.length === 0) return { added: 0, duplicates };
+
+    const nextClasses = [...classes, ...accepted];
+    setClasses(nextClasses);
+    setNewClassIds((current) => [
+      ...current,
+      ...accepted.map((classInfo) => classInfo.id),
+    ]);
+    setResult((current) =>
+      current
+        ? {
+            ...current,
+            unassigned: [
+              ...current.unassigned,
+              ...accepted.map((classInfo) => ({
+                classInfo,
+                reason:
+                  "Lớp mới nhập đang chờ xếp. Bấm “Sắp xếp tự động” để tìm phòng và tiết còn trống.",
+              })),
+            ],
+          }
+        : autoSchedule(nextClasses, ROOMS),
+    );
+
+    return { added: accepted.length, duplicates };
   }
 
   function handleRemoveClass(id: string) {
@@ -741,127 +810,7 @@ export function AdminScheduler() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-blue-100 bg-blue-50/50 p-5 shadow-[0_8px_30px_rgb(15,23,42,0.05)]">
-        <div className="mb-4 flex items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-            <CalendarDays className="size-5" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-foreground">
-              Tải thời khóa biểu Excel
-            </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Chọn học kỳ, năm học và file .xlsx để kiểm tra trước khi lưu lớp.
-              Cột bắt buộc: Tên môn/lớp, Sĩ số, Thứ, Ca học, Số tiết.
-            </p>
-          </div>
-        </div>
-        <div className="grid gap-3 md:grid-cols-[150px_150px_minmax(0,1fr)_auto] md:items-end">
-          <label className="text-xs font-semibold text-muted-foreground">
-            Học kỳ
-            <select
-              defaultValue="1"
-              className="mt-1.5 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground"
-            >
-              <option value="1">Học kỳ I</option>
-              <option value="2">Học kỳ II</option>
-              <option value="3">Học kỳ hè</option>
-            </select>
-          </label>
-          <label className="text-xs font-semibold text-muted-foreground">
-            Năm học
-            <select
-              defaultValue="2025-2026"
-              className="mt-1.5 w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground"
-            >
-              <option>2025-2026</option>
-              <option>2026-2027</option>
-              <option>2027-2028</option>
-            </select>
-          </label>
-          <label className="text-xs font-semibold text-muted-foreground">
-            File thời khóa biểu
-            <input
-              type="file"
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={isImporting}
-              onChange={(event) => handleImportFile(event.target.files?.[0])}
-              className="mt-1.5 block w-full cursor-pointer rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-blue-700"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={isImporting}
-            onClick={() => document.querySelector<HTMLInputElement>('input[type="file"]')?.click()}
-            className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
-          >
-            {isImporting ? "Đang đọc..." : "Tải lên & Kiểm tra"}
-          </button>
-        </div>
-
-        {importState && (
-          <div className="mt-5 overflow-hidden rounded-xl border border-border bg-card">
-            <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-bold text-foreground">
-                  Xem trước: {importState.fileName}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {importState.rows.length} dòng · {importState.classes.length} dòng hợp lệ
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={Boolean(importState.errors.length) || !importState.classes.length}
-                onClick={handleConfirmImport}
-                className="rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Xác nhận import
-              </button>
-            </div>
-            {importState.errors.length > 0 && (
-              <div className="border-b border-red-100 bg-red-50 p-4">
-                <p className="mb-2 flex items-center gap-2 text-sm font-bold text-red-700">
-                  <AlertTriangle className="size-4" /> Danh sách lỗi ({importState.errors.length})
-                </p>
-                <ul className="max-h-32 space-y-1 overflow-auto text-xs text-red-700">
-                  {importState.errors.map((error) => <li key={error}>• {error}</li>)}
-                </ul>
-              </div>
-            )}
-            {importState.rows.length > 0 && (
-              <div className="max-h-72 overflow-auto">
-                <table className="min-w-full text-left text-xs">
-                  <thead className="sticky top-0 bg-slate-100 text-[11px] uppercase text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-2">Dòng</th>
-                      <th className="px-3 py-2">Môn/lớp</th>
-                      <th className="px-3 py-2">Sĩ số</th>
-                      <th className="px-3 py-2">Thứ</th>
-                      <th className="px-3 py-2">Ca</th>
-                      <th className="px-3 py-2">Trạng thái</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {importState.rows.map((row) => (
-                      <tr key={row.rowNumber} className={row.errors.length ? "bg-red-50/70" : ""}>
-                        <td className="px-3 py-2 text-muted-foreground">{row.rowNumber}</td>
-                        <td className="px-3 py-2 font-medium">{String(row.values[Object.keys(row.values)[0]] ?? row.classInfo?.name ?? "—")}</td>
-                        <td className="px-3 py-2">{row.classInfo?.size ?? "—"}</td>
-                        <td className="px-3 py-2">{row.classInfo?.day ?? "—"}</td>
-                        <td className="px-3 py-2">{row.classInfo?.shift ? SHIFT_LABELS[row.classInfo.shift] : "—"}</td>
-                        <td className={`px-3 py-2 font-semibold ${row.errors.length ? "text-red-600" : "text-emerald-600"}`}>
-                          {row.errors.length ? row.errors.join("; ") : "Hợp lệ"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
+      <TimetableUpload onImport={handleImportClasses} />
       <AddClassForm onAdd={handleAddClass} />
 
       <section
@@ -913,8 +862,8 @@ export function AdminScheduler() {
               khả dụng
             </p>
             <p className="text-xs text-muted-foreground">
-              Multi-pass Best-Fit: giữ nguyên TKB K23–K25, ưu tiên lớp ≥150, sau
-              đó lớp lớn/nhỏ; phần còn lại là vùng dự trù K26.
+              Sau khi phân bổ, các lịch được lưu cố định. Lớp mới chỉ được xếp
+              vào tiết còn trống, không thay đổi phòng của các lớp đã xếp.
             </p>
           </div>
         </div>
@@ -1293,6 +1242,43 @@ export function AdminScheduler() {
                 const shiftItems = dayAssignments
                   .filter((a) => a.shift === shift)
                   .sort((a, b) => a.startPeriod - b.startPeriod);
+                const roomsWithFreePeriods = ROOMS.filter(
+                  (room) =>
+                    (selectedCampus === "all" ||
+                      room.campus === selectedCampus) &&
+                    (selectedBuilding === "all" ||
+                      room.building === selectedBuilding),
+                )
+                  .map((room) => {
+                    const occupiedPeriods = new Set(
+                      displayAssignments
+                        .filter(
+                          (assignment) =>
+                            assignment.roomId === room.id &&
+                            assignment.day === selectedDay &&
+                            assignment.shift === shift,
+                        )
+                        .flatMap((assignment) =>
+                          SHIFT_PERIODS[shift].filter(
+                            (period) =>
+                              period >= assignment.startPeriod &&
+                              period <= assignment.endPeriod,
+                          ),
+                        ),
+                    );
+                    return {
+                      room,
+                      freePeriods: SHIFT_PERIODS[shift].filter(
+                        (period) => !occupiedPeriods.has(period),
+                      ),
+                    };
+                  })
+                  .filter((item) => item.freePeriods.length > 0)
+                  .sort((a, b) =>
+                    a.room.name.localeCompare(b.room.name, "vi", {
+                      numeric: true,
+                    }),
+                  );
                 return (
                   <div
                     key={shift}
@@ -1455,6 +1441,32 @@ export function AdminScheduler() {
                         })}
                       </div>
                     )}
+                    <details className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+                      <summary className="cursor-pointer text-sm font-semibold text-emerald-900">
+                        Phòng còn tiết trống ({roomsWithFreePeriods.length})
+                      </summary>
+                      {roomsWithFreePeriods.length === 0 ? (
+                        <p className="mt-2 text-xs text-emerald-800">
+                          Không còn tiết trống trong ca này theo bộ lọc cơ sở/tòa.
+                        </p>
+                      ) : (
+                        <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                          {roomsWithFreePeriods.map(({ room, freePeriods }) => (
+                            <li
+                              key={room.id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/80 px-2.5 py-2 text-xs"
+                            >
+                              <span className="font-semibold text-slate-800">
+                                {room.name} · {room.capacity} chỗ
+                              </span>
+                              <span className="text-emerald-800">
+                                Tiết {freePeriods.join(", ")}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </details>
                   </div>
                 );
               })}

@@ -302,6 +302,8 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
 
   for (const cls of sorted) {
     const eligibleRooms = roomsByCapAsc.filter((room) => cls.size >= 150 || !isHallRoom(room))
+    const hasFixedPeriods =
+      Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
 
     const placementCandidates: Array<{
       candidateRoom: RoomInfo
@@ -313,15 +315,30 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
       preference: number
     }> = []
 
-    for (const day of DAYS) {
-      for (const shift of SHIFTS) {
+    for (const day of hasFixedPeriods ? [cls.day] : DAYS) {
+      for (const shift of hasFixedPeriods ? [cls.shift] : SHIFTS) {
         const shiftPeriods = SHIFT_PERIODS[shift]
         if (cls.periods > shiftPeriods.length) continue
+
+        if (
+          hasFixedPeriods &&
+          (!shiftPeriods.includes(cls.startPeriod!) ||
+            !shiftPeriods.includes(cls.endPeriod!) ||
+            cls.endPeriod! - cls.startPeriod! + 1 !== cls.periods)
+        ) {
+          continue
+        }
 
         for (const room of eligibleRooms) {
           const key = occKey(day, room.id)
           const used = occupancy.get(key) ?? new Set<number>()
-          const start = findFreeBlock(used, shiftPeriods, cls.periods)
+          const start = hasFixedPeriods
+            ? [...Array(cls.periods)].every(
+                (_, index) => !used.has(cls.startPeriod! + index),
+              )
+              ? cls.startPeriod!
+              : null
+            : findFreeBlock(used, shiftPeriods, cls.periods)
           if (start === null) continue
 
           const sameOriginalSlot = day === cls.day && shift === cls.shift
@@ -404,7 +421,36 @@ export function findIncrementalAssignment(
   rooms: RoomInfo[],
   assignments: Assignment[],
 ): Assignment | null {
-  const alternatives = findAlternatives(cls, rooms, assignments, Number.MAX_SAFE_INTEGER)
+  const hasFixedPeriods =
+    Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
+  const alternatives = hasFixedPeriods
+    ? rooms
+        .filter((room) => {
+          if (cls.size < 150 && isHallRoom(room)) return false
+          const periods = SHIFT_PERIODS[cls.shift]
+          if (
+            !periods.includes(cls.startPeriod!) ||
+            !periods.includes(cls.endPeriod!) ||
+            cls.endPeriod! - cls.startPeriod! + 1 !== cls.periods
+          ) {
+            return false
+          }
+          return !assignments.some(
+            (assignment) =>
+              assignment.day === cls.day &&
+              assignment.roomId === room.id &&
+              assignment.startPeriod <= cls.endPeriod! &&
+              cls.startPeriod! <= assignment.endPeriod,
+          )
+        })
+        .map((room) => ({
+          day: cls.day,
+          shift: cls.shift,
+          roomId: room.id,
+          startPeriod: cls.startPeriod!,
+          endPeriod: cls.endPeriod!,
+        }))
+    : findAlternatives(cls, rooms, assignments, Number.MAX_SAFE_INTEGER)
   const roomById = new Map(rooms.map((room) => [room.id, room]))
   const selected = alternatives.sort((left, right) => {
     const leftOriginal = left.day === cls.day && left.shift === cls.shift ? 0 : 1
@@ -445,6 +491,81 @@ export function addClassIncrementally(
   }
 
   return buildScheduleResult([...current.assignments, assignment], current.unassigned, rooms)
+}
+
+/** Xếp các lớp chưa có assignment vào slot trống, giữ nguyên mọi assignment đã lưu. */
+export function schedulePendingClasses(
+  classes: ClassInfo[],
+  rooms: RoomInfo[],
+  current: ScheduleResult,
+): ScheduleResult {
+  const assignedIds = new Set(current.assignments.map((assignment) => assignment.classId))
+  const pending = classes
+    .filter((classInfo) => !assignedIds.has(classInfo.id))
+    .sort((a, b) => {
+      const roomFitCount = (cls: ClassInfo) =>
+        rooms.filter((room) => (cls.size >= 150 || !isHallRoom(room)) && room.capacity >= cls.size).length
+      const fitDifference = roomFitCount(a) - roomFitCount(b)
+      if (fitDifference !== 0) return fitDifference
+      if (a.periods !== b.periods) return b.periods - a.periods
+      if (a.size !== b.size) return b.size - a.size
+      return a.day - b.day || SHIFTS.indexOf(a.shift) - SHIFTS.indexOf(b.shift)
+    })
+
+  const assignments = [...current.assignments]
+  const unassigned: Unassigned[] = []
+  for (const classInfo of pending) {
+    const assignment = findIncrementalAssignment(classInfo, rooms, assignments)
+    if (!assignment) {
+      unassigned.push({
+        classInfo,
+        reason: `Không còn khung giờ/phòng trống phù hợp cho ${classInfo.name}. Các lịch đã phân trước đó được giữ nguyên.`,
+      })
+      continue
+    }
+    assignments.push(assignment)
+  }
+
+  return buildScheduleResult(assignments, unassigned, rooms)
+}
+
+/** Gỡ lịch trong một phòng/ca đã chọn và đưa các lớp bị gỡ về trạng thái chưa xếp. */
+export function releaseRoomAssignments(
+  roomId: string,
+  day: number,
+  shift: Shift,
+  classes: ClassInfo[],
+  rooms: RoomInfo[],
+  current: ScheduleResult,
+): ScheduleResult {
+  const released = current.assignments.filter(
+    (assignment) =>
+      assignment.roomId === roomId &&
+      assignment.day === day &&
+      assignment.shift === shift,
+  )
+  if (released.length === 0) return current
+
+  const releasedIds = new Set(released.map((assignment) => assignment.classId))
+  const classById = new Map(classes.map((classInfo) => [classInfo.id, classInfo]))
+  const unassigned = current.unassigned.filter(
+    (item) => !releasedIds.has(item.classInfo.id),
+  )
+
+  for (const assignment of released) {
+    const classInfo = classById.get(assignment.classId)
+    if (!classInfo) continue
+    unassigned.push({
+      classInfo,
+      reason: `Lịch của lớp ${classInfo.name} đã được quản trị viên gỡ khỏi phòng ${roomId}; lớp đang chờ được xếp lại.`,
+    })
+  }
+
+  return buildScheduleResult(
+    current.assignments.filter((assignment) => !releasedIds.has(assignment.classId)),
+    unassigned,
+    rooms,
+  )
 }
 
 /** Gỡ một lớp khỏi lịch đã chốt mà không đụng tới các assignment còn lại. */

@@ -43,7 +43,7 @@ export default function Page() {
             href="/lecturer"
             icon={<BookOpen className="size-6" />}
             title="Cổng giảng viên"
-            description="Tra cứu phòng trống và gửi yêu cầu mượn phòng để quản trị viên phê duyệt."
+            description="Tra cứu lịch lớp, phòng mượn, thiết bị và gửi yêu cầu mượn phòng."
             action="Mở cổng giảng viên"
           />
         </main>
