@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tra Cứu Phòng Học Smart Campus</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen p-4 font-sans text-slate-800">
+
+  <!-- Header -->
+  <header class="max-w-md mx-auto mb-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+    <h1 class="text-xl font-bold text-slate-900">Trạng Thái Phòng Học</h1>
+    <p class="text-xs text-slate-500 mt-1">Giờ hiện tại: <span id="current-time" class="font-semibold text-blue-600">--:--</span></p>
+  </header>
+
+  <!-- Room List -->
+  <main class="max-w-md mx-auto space-y-3" id="room-list">
+    <!-- Render từ JS -->
+  </main>
+
+  <!-- Modal Mượn Phòng Tạm Thời -->
+  <div id="booking-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 backdrop-blur-sm">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4">
+      <h3 class="font-bold text-lg text-slate-900" id="modal-room-name">Mượn phòng</h3>
+      
+      <div id="modal-info" class="text-sm text-slate-600 bg-blue-50 p-3 rounded-lg border border-blue-200">
+        Chọn thời gian và sức chứa tối thiểu để kiểm tra trực tiếp với hệ thống.
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="text-xs font-semibold text-slate-600">Thứ
+          <select id="day-option" class="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal">
+            <option value="2">Thứ Hai</option><option value="3">Thứ Ba</option>
+            <option value="4">Thứ Tư</option><option value="5">Thứ Năm</option>
+            <option value="6">Thứ Sáu</option><option value="7">Thứ Bảy</option>
+            <option value="1">Chủ Nhật</option>
+          </select>
+        </label>
+        <label class="text-xs font-semibold text-slate-600">Ca học
+          <select id="shift-option" class="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal">
+            <option value="Sáng">Sáng</option><option value="Chiều">Chiều</option><option value="Tối">Tối</option>
+          </select>
+        </label>
+        <label class="text-xs font-semibold text-slate-600">Tiết bắt đầu
+          <select id="period-start" class="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal"></select>
+        </label>
+        <label class="text-xs font-semibold text-slate-600">Tiết kết thúc
+          <select id="period-end" class="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal"></select>
+        </label>
+        <label class="col-span-2 text-xs font-semibold text-slate-600">Sức chứa tối thiểu
+          <input id="minimum-capacity" type="number" min="1" value="1" class="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal">
+        </label>
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button onclick="closeModal()" class="flex-1 py-2 rounded-xl bg-slate-100 font-semibold text-slate-600 text-sm">Hủy</button>
+        <button id="check-availability" onclick="checkAvailability()" class="flex-1 py-2 rounded-xl bg-blue-600 font-semibold text-white text-sm hover:bg-blue-700">Kiểm tra</button>
+      </div>
+      <div id="availability-result" class="hidden text-sm" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script>
+    let rooms = [];
+    let selectedRoom = null;
+
+    function updateClock() {
+      document.getElementById('current-time').textContent = new Intl.DateTimeFormat('vi-VN', {
+        hour: '2-digit', minute: '2-digit',
+      }).format(new Date());
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      })[character]);
+    }
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+      const payload = await response.json();
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.message || `Yêu cầu thất bại (${response.status})`);
+      }
+      return payload.data;
+    }
+
+    async function loadRooms() {
+      const container = document.getElementById('room-list');
+      container.innerHTML = '<p class="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-500">Đang tải dữ liệu phòng học...</p>';
+      try {
+        rooms = await requestJson('/api/phong-hoc');
+        renderRooms();
+      } catch (error) {
+        container.innerHTML = `<div class="bg-white rounded-xl border border-red-200 p-4 text-sm text-red-700">
+          Không tải được danh sách phòng: ${escapeHtml(error.message)}
+          <button onclick="loadRooms()" class="mt-3 block font-semibold text-blue-700 underline">Thử lại</button>
+        </div>`;
+      }
+    }
+
+    function renderRooms() {
+      const container = document.getElementById('room-list');
+      if (!rooms.length) {
+        container.innerHTML = '<p class="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-500">Backend chưa có dữ liệu phòng.</p>';
+        return;
+      }
+
+      container.innerHTML = rooms.map((room, index) => {
+        const status = String(room.TrangThai || 'Không rõ');
+        const available = /sẵn|san|trống|trong|available/i.test(status);
+        const tone = available
+          ? { border: 'border-emerald-200', dot: 'bg-emerald-500', badge: 'bg-emerald-100 text-emerald-700', label: 'Sẵn sàng' }
+          : { border: 'border-amber-200', dot: 'bg-amber-500', badge: 'bg-amber-100 text-amber-700', label: status };
+        return `<article class="bg-white p-4 rounded-xl border ${tone.border} shadow-sm flex justify-between items-center gap-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="w-3 h-3 rounded-full ${tone.dot}"></span>
+              <span class="font-bold text-lg">${escapeHtml(room.TenPhong)}</span>
+              <span class="text-xs px-2 py-0.5 ${tone.badge} font-semibold rounded-full">${escapeHtml(tone.label)}</span>
+            </div>
+            <p class="text-xs text-slate-500 mt-1">${escapeHtml(room.TenToa)} · ${escapeHtml(room.TenCoSo)}</p>
+            <p class="text-xs text-slate-500">Sức chứa: ${escapeHtml(room.SucChua)} · ${escapeHtml(room.LoaiPhong)}</p>
+          </div>
+          ${available ? `<button onclick="openBookingModal(${index})" class="shrink-0 px-3 py-2 bg-blue-50 text-blue-700 text-xs font-bold rounded-lg hover:bg-blue-100 border border-blue-200">Kiểm tra</button>` : ''}
+        </article>`;
+      }).join('');
+    }
+
+    function updatePeriodOptions() {
+      const start = document.getElementById('period-start');
+      const end = document.getElementById('period-end');
+      const periods = Array.from({ length: 5 }, (_, index) => index + 1);
+      start.innerHTML = periods.map(period => `<option value="${period}">Tiết ${period}</option>`).join('');
+      end.innerHTML = periods.map(period => `<option value="${period}">Tiết ${period}</option>`).join('');
+      start.value = '1';
+      end.value = '1';
+    }
+
+    function openBookingModal(index) {
+      selectedRoom = rooms[index];
+      document.getElementById('modal-room-name').textContent = `Kiểm tra phòng ${selectedRoom.TenPhong}`;
+      document.getElementById('minimum-capacity').value = selectedRoom.SucChua || 1;
+      document.getElementById('availability-result').classList.add('hidden');
+      document.getElementById('day-option').value = String(new Date().getDay() + 1);
+      updatePeriodOptions();
+      document.getElementById('booking-modal').classList.remove('hidden');
+      document.getElementById('booking-modal').classList.add('flex');
+    }
+
+    async function checkAvailability() {
+      const button = document.getElementById('check-availability');
+      const result = document.getElementById('availability-result');
+      const start = Number(document.getElementById('period-start').value);
+      const end = Number(document.getElementById('period-end').value);
+      const capacity = Number(document.getElementById('minimum-capacity').value);
+      if (end < start || capacity < 1) {
+        result.textContent = 'Vui lòng chọn khoảng tiết và sức chứa hợp lệ.';
+        result.className = 'text-sm text-red-700';
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = 'Đang kiểm tra...';
+      result.classList.remove('hidden');
+      result.textContent = '';
+      try {
+        const matches = await requestJson('/api/kiem-tra-phong-trong', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            thu: Number(document.getElementById('day-option').value),
+            caHoc: document.getElementById('shift-option').value,
+            tietBatDau: start,
+            tietKetThuc: end,
+            sucChuaToiThieu: capacity,
+          }),
+        });
+        const selectedIsAvailable = matches.some(room => room.TenPhong === selectedRoom.TenPhong);
+        result.className = selectedIsAvailable
+          ? 'text-sm text-emerald-700'
+          : 'text-sm text-amber-700';
+        result.innerHTML = selectedIsAvailable
+          ? `<p>Phòng ${escapeHtml(selectedRoom.TenPhong)} còn trống trong khung giờ đã chọn.</p>`
+          : `<p>Phòng ${escapeHtml(selectedRoom.TenPhong)} không phù hợp hoặc không còn trống trong khung giờ này.</p>`;
+        if (matches.length) {
+          result.innerHTML += `<p class="mt-2 font-semibold">Phòng phù hợp: ${matches.map(room => escapeHtml(room.TenPhong)).join(', ')}</p>`;
+        }
+      } catch (error) {
+        result.className = 'text-sm text-red-700';
+        result.textContent = `Không kiểm tra được: ${error.message}`;
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Kiểm tra';
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('booking-modal').classList.add('hidden');
+      document.getElementById('booking-modal').classList.remove('flex');
+      selectedRoom = null;
+    }
+
+    document.getElementById('period-start').addEventListener('change', () => {
+      const start = Number(document.getElementById('period-start').value);
+      const end = document.getElementById('period-end');
+      if (Number(end.value) < start) end.value = String(start);
+    });
+    document.getElementById('shift-option').addEventListener('change', updatePeriodOptions);
+    updateClock();
+    setInterval(updateClock, 30000);
+    loadRooms();
+  </script>
+</body>
+</html>
