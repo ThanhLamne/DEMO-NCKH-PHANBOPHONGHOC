@@ -11,11 +11,11 @@ app.use(cors());
 
 // Cấu hình chỉ định driver trực tiếp
 const config = {
-    connectionString: 'Driver={SQL Server};Server=DESKTOP-KMNS09Q;Database=APAG_QuanLyPhongHoc;Trusted_Connection=yes;',
+    connectionString: 'Driver={SQL Server};Server=sql8011.site4now.net;Database=db_acfca2_apagqly;Trusted_Connection=yes;',
     driver: 'msnodesqlv8'
 };
 
-console.log("🔄 Đang chuẩn bị kết nối SQL Server tại DESKTOP-KMNS09Q...");
+console.log("🔄 Đang chuẩn bị kết nối SQL Server tại sql8011.site4now.net...");
 
 sql.connect(config)
     .then(pool => {
