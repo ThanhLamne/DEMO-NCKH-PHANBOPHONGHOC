@@ -35,6 +35,52 @@ export type ClassInfo = {
   section?: string
 }
 
+export function classImportIdentityKey(
+  classInfo: Pick<
+    ClassInfo,
+    | "name"
+    | "courseCode"
+    | "className"
+    | "section"
+  >,
+): string {
+  const normalize = (value: string) => value.trim().toLocaleLowerCase()
+  const course = normalize(classInfo.courseCode ?? "") || normalize(classInfo.name)
+  let classCode = normalize(classInfo.className ?? "")
+  const section = normalize(classInfo.section ?? "")
+  if (classCode && section && !classCode.endsWith(`.${section}`)) {
+    classCode = `${classCode}.${section}`
+  }
+  if (classCode) return `${course}|${classCode}`
+
+  const base = course
+  if (section) return `${base}|${section}`
+  return base
+}
+
+export function classImportKey(
+  classInfo: Pick<
+    ClassInfo,
+    | "name"
+    | "courseCode"
+    | "className"
+    | "section"
+    | "day"
+    | "shift"
+    | "startPeriod"
+    | "endPeriod"
+  >,
+): string {
+  const identity = classImportIdentityKey(classInfo) || classInfo.name.trim().toLocaleLowerCase()
+  return [
+    identity,
+    classInfo.day,
+    classInfo.shift,
+    classInfo.startPeriod ?? "",
+    classInfo.endPeriod ?? "",
+  ].join("|")
+}
+
 export type Assignment = {
   classId: string
   roomId: string
@@ -153,11 +199,8 @@ export function periodTime(period: number): string {
 
 /** Khoảng giờ từ tiết bắt đầu đến tiết kết thúc. */
 export function rangeTime(startPeriod: number, endPeriod: number): string {
-  const shift = shiftOfPeriod(startPeriod)
-  const startIndex = SHIFT_PERIODS[shift].indexOf(startPeriod)
-  const endIndex = SHIFT_PERIODS[shift].indexOf(endPeriod)
-  const start = addMinutes(SHIFT_START[shift], startIndex * PERIOD_MINUTES)
-  const end = addMinutes(SHIFT_START[shift], (endIndex + 1) * PERIOD_MINUTES)
+  const start = periodTime(startPeriod).split(" - ")[0]
+  const end = periodTime(endPeriod).split(" - ")[1]
   return `${start} - ${end}`
 }
 
@@ -272,25 +315,66 @@ function isHallRoom(room: RoomInfo): boolean {
   return room.kind === "hall" || room.building === "HoiTruong" || room.name.toLocaleUpperCase().startsWith("HT-")
 }
 
+function hasFixedPeriodValues(cls: ClassInfo): boolean {
+  return Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
+}
+
+function hasValidFixedPeriodRange(cls: ClassInfo): boolean {
+  return hasFixedPeriodValues(cls) &&
+    cls.startPeriod! >= 1 &&
+    cls.endPeriod! <= 13 &&
+    cls.endPeriod! >= cls.startPeriod! &&
+    cls.endPeriod! - cls.startPeriod! + 1 === cls.periods
+}
+
+function schedulingPass(cls: ClassInfo): number {
+  if (cls.size >= 150) return 0
+  if (cls.size >= 90) return 1
+  return 2
+}
+
+function compareClassesForScheduling(left: ClassInfo, right: ClassInfo): number {
+  return (
+    schedulingPass(left) - schedulingPass(right) ||
+    right.size - left.size ||
+    right.periods - left.periods ||
+    left.day - right.day ||
+    SHIFTS.indexOf(left.shift) - SHIFTS.indexOf(right.shift)
+  )
+}
+
+function compareRoomFit(size: number, left: RoomInfo, right: RoomInfo): number {
+  if (size < 150) {
+    const hallDifference = Number(isHallRoom(left)) - Number(isHallRoom(right))
+    if (hallDifference !== 0) return hallDifference
+  }
+  const leftShortage = Math.max(0, size - left.capacity)
+  const rightShortage = Math.max(0, size - right.capacity)
+  if (leftShortage !== rightShortage) return leftShortage - rightShortage
+  if (size >= 150) {
+    const hallDifference = Number(isHallRoom(right)) - Number(isHallRoom(left))
+    if (hallDifference !== 0) return hallDifference
+    return right.capacity - left.capacity
+  }
+  return left.capacity - right.capacity
+}
+
 /**
- * Thuật toán sắp xếp:
- * 1. Duyệt lần lượt từ Thứ Hai -> Thứ Bảy.
- * 2. Trong mỗi ngày, ưu tiên lớp sĩ số LỚN nhất trước.
- * 3. Chọn phòng nhỏ nhất mà vẫn đủ sức chứa (best-fit) để dành phòng lớn cho lớp đông.
- * 4. Lớp không đủ phòng / hết chỗ -> đẩy ra danh sách "ngoài".
+ * Giữ nguyên khung tiết cố định của TKB, xếp lớp đông và khó bố trí trước,
+ * rồi dùng hội trường cho lớp rất đông và best-fit cho các lớp còn lại.
  */
 export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleResult {
-  const roomFitCount = (cls: ClassInfo): number =>
-    rooms.filter((room) => (cls.size >= 150 || !isHallRoom(room)) && room.capacity >= cls.size).length
-
+  // Sweep fixed intervals by start time to avoid room fragmentation from size-only ordering.
   const sorted = [...classes].sort((a, b) => {
-    if (a.day !== b.day) return a.day - b.day
-    if (a.shift !== b.shift) return SHIFTS.indexOf(a.shift) - SHIFTS.indexOf(b.shift)
-    const aFitCount = roomFitCount(a)
-    const bFitCount = roomFitCount(b)
-    if (aFitCount !== bFitCount) return aFitCount - bFitCount
-    if (a.periods !== b.periods) return b.periods - a.periods
-    return b.size - a.size
+    const leftFixed = hasFixedPeriodValues(a)
+    const rightFixed = hasFixedPeriodValues(b)
+    if (leftFixed !== rightFixed) return leftFixed ? -1 : 1
+    if (leftFixed && rightFixed) {
+      if (a.day !== b.day) return a.day - b.day
+      if (a.startPeriod !== b.startPeriod) return a.startPeriod! - b.startPeriod!
+      if (a.endPeriod !== b.endPeriod) return b.endPeriod! - a.endPeriod!
+    }
+    return compareClassesForScheduling(a, b)
   })
 
   const roomsByCapAsc = [...rooms].sort((a, b) => {
@@ -311,9 +395,15 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
       continue
     }
 
-    const eligibleRooms = roomsByCapAsc.filter((room) => cls.size >= 150 || !isHallRoom(room))
-    const hasFixedPeriods =
-      Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
+    const eligibleRooms = roomsByCapAsc
+    const hasFixedPeriods = hasFixedPeriodValues(cls)
+    if (hasFixedPeriods && !hasValidFixedPeriodRange(cls)) {
+      unassigned.push({
+        classInfo: cls,
+        reason: `Tiết cố định của lớp ${cls.name} không hợp lệ; hãy kiểm tra lại thời khóa biểu.`,
+      })
+      continue
+    }
 
     const placementCandidates: Array<{
       candidateRoom: RoomInfo
@@ -328,16 +418,7 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
     for (const day of hasFixedPeriods ? [cls.day] : DAYS) {
       for (const shift of hasFixedPeriods ? [cls.shift] : SHIFTS) {
         const shiftPeriods = SHIFT_PERIODS[shift]
-        if (cls.periods > shiftPeriods.length) continue
-
-        if (
-          hasFixedPeriods &&
-          (!shiftPeriods.includes(cls.startPeriod!) ||
-            !shiftPeriods.includes(cls.endPeriod!) ||
-            cls.endPeriod! - cls.startPeriod! + 1 !== cls.periods)
-        ) {
-          continue
-        }
+        if (!hasFixedPeriods && cls.periods > shiftPeriods.length) continue
 
         for (const room of eligibleRooms) {
           const key = occKey(day, room.id)
@@ -370,8 +451,12 @@ export function autoSchedule(classes: ClassInfo[], rooms: RoomInfo[]): ScheduleR
 
     const chosen = placementCandidates.sort((a, b) => {
       if (a.preference !== b.preference) return a.preference - b.preference
-      if (a.shortage !== b.shortage) return a.shortage - b.shortage
-      if (a.candidateRoom.capacity !== b.candidateRoom.capacity) return a.candidateRoom.capacity - b.candidateRoom.capacity
+      const roomPreference = compareRoomFit(
+        cls.size,
+        a.candidateRoom,
+        b.candidateRoom,
+      )
+      if (roomPreference !== 0) return roomPreference
       return a.day - b.day
     })[0]
 
@@ -430,23 +515,16 @@ export function findIncrementalAssignment(
   cls: ClassInfo,
   rooms: RoomInfo[],
   assignments: Assignment[],
+  allowHallFallback = false,
 ): Assignment | null {
   if (cls.size < 1 || cls.needsReview?.length) return null
 
-  const hasFixedPeriods =
-    Number.isInteger(cls.startPeriod) && Number.isInteger(cls.endPeriod)
+  const hasFixedPeriods = hasFixedPeriodValues(cls)
+  if (hasFixedPeriods && !hasValidFixedPeriodRange(cls)) return null
   const alternatives = hasFixedPeriods
     ? rooms
         .filter((room) => {
-          if (cls.size < 150 && isHallRoom(room)) return false
-          const periods = SHIFT_PERIODS[cls.shift]
-          if (
-            !periods.includes(cls.startPeriod!) ||
-            !periods.includes(cls.endPeriod!) ||
-            cls.endPeriod! - cls.startPeriod! + 1 !== cls.periods
-          ) {
-            return false
-          }
+            if (cls.size < 150 && isHallRoom(room) && !allowHallFallback) return false
           return !assignments.some(
             (assignment) =>
               assignment.day === cls.day &&
@@ -462,18 +540,23 @@ export function findIncrementalAssignment(
           startPeriod: cls.startPeriod!,
           endPeriod: cls.endPeriod!,
         }))
-    : findAlternatives(cls, rooms, assignments, Number.MAX_SAFE_INTEGER)
+    : findAlternatives(
+        cls,
+        rooms,
+        assignments,
+        Number.MAX_SAFE_INTEGER,
+        allowHallFallback,
+      )
   const roomById = new Map(rooms.map((room) => [room.id, room]))
   const selected = alternatives.sort((left, right) => {
     const leftOriginal = left.day === cls.day && left.shift === cls.shift ? 0 : 1
     const rightOriginal = right.day === cls.day && right.shift === cls.shift ? 0 : 1
     if (leftOriginal !== rightOriginal) return leftOriginal - rightOriginal
-    const leftRoom = roomById.get(left.roomId)
-    const rightRoom = roomById.get(right.roomId)
-    const leftShortage = Math.max(0, cls.size - (leftRoom?.capacity ?? 0))
-    const rightShortage = Math.max(0, cls.size - (rightRoom?.capacity ?? 0))
-    if (leftShortage !== rightShortage) return leftShortage - rightShortage
-    return (leftRoom?.capacity ?? 0) - (rightRoom?.capacity ?? 0)
+    return compareRoomFit(
+      cls.size,
+      roomById.get(left.roomId)!,
+      roomById.get(right.roomId)!,
+    )
   })[0]
 
   if (!selected) return null
@@ -514,20 +597,17 @@ export function schedulePendingClasses(
   const assignedIds = new Set(current.assignments.map((assignment) => assignment.classId))
   const pending = classes
     .filter((classInfo) => !assignedIds.has(classInfo.id))
-    .sort((a, b) => {
-      const roomFitCount = (cls: ClassInfo) =>
-        rooms.filter((room) => (cls.size >= 150 || !isHallRoom(room)) && room.capacity >= cls.size).length
-      const fitDifference = roomFitCount(a) - roomFitCount(b)
-      if (fitDifference !== 0) return fitDifference
-      if (a.periods !== b.periods) return b.periods - a.periods
-      if (a.size !== b.size) return b.size - a.size
-      return a.day - b.day || SHIFTS.indexOf(a.shift) - SHIFTS.indexOf(b.shift)
-    })
+    .sort(compareClassesForScheduling)
 
   const assignments = [...current.assignments]
   const unassigned: Unassigned[] = []
   for (const classInfo of pending) {
-    const assignment = findIncrementalAssignment(classInfo, rooms, assignments)
+    const assignment = findIncrementalAssignment(
+      classInfo,
+      rooms,
+      assignments,
+      true,
+    )
     if (!assignment) {
       unassigned.push({
         classInfo,
@@ -614,29 +694,38 @@ export function findAlternatives(
   rooms: RoomInfo[],
   assignments: Assignment[],
   limit = 6,
+  allowHallFallback = false,
 ): AltSlot[] {
   if (cls.size < 1 || cls.needsReview?.length) return []
 
   const occupancy = buildOccupancy(assignments)
+  const hasFixedPeriods = hasFixedPeriodValues(cls)
+  if (hasFixedPeriods && !hasValidFixedPeriodRange(cls)) return []
   const candidateRooms = [...rooms]
-    .filter((room) => cls.size >= 150 || !isHallRoom(room))
-    .sort((a, b) => {
-      const shortageA = Math.max(0, cls.size - a.capacity)
-      const shortageB = Math.max(0, cls.size - b.capacity)
-      if (shortageA !== shortageB) return shortageA - shortageB
-      return a.capacity - b.capacity
-    })
+    .filter(
+      (room) =>
+        cls.size >= 150 ||
+        allowHallFallback ||
+        !isHallRoom(room),
+    )
+    .sort((a, b) => compareRoomFit(cls.size, a, b))
 
   const results: AltSlot[] = []
 
-  for (const day of DAYS) {
-    for (const shift of SHIFTS) {
+  for (const day of hasFixedPeriods ? [cls.day] : DAYS) {
+    for (const shift of hasFixedPeriods ? [cls.shift] : SHIFTS) {
       const shiftPeriods = SHIFT_PERIODS[shift]
-      if (cls.periods > shiftPeriods.length) continue
+      if (!hasFixedPeriods && cls.periods > shiftPeriods.length) continue
 
       for (const room of candidateRooms) {
         const used = occupancy.get(occKey(day, room.id)) ?? new Set<number>()
-        const start = findFreeBlock(used, shiftPeriods, cls.periods)
+        const start = hasFixedPeriods
+          ? [...Array(cls.periods)].every(
+              (_, index) => !used.has(cls.startPeriod! + index),
+            )
+            ? cls.startPeriod!
+            : null
+          : findFreeBlock(used, shiftPeriods, cls.periods)
         if (start === null) continue
         const end = start + cls.periods - 1
         if ([...Array(end - start + 1)].every((_, index) => !used.has(start + index))) {

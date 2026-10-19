@@ -26,12 +26,27 @@ import {
   DAYS,
   rangeTime,
   SHIFT_LABELS,
-  SHIFT_PERIODS,
   SHIFTS,
+  type RoomInfo,
   type Shift,
   releaseRoomAssignments,
 } from "@/lib/scheduling";
 import { SHEET_ROOMS } from "@/lib/schedule-data";
+
+type RoomCampus = NonNullable<RoomInfo["campus"]>;
+type CampusSelection = "all" | RoomCampus;
+
+const CAMPUS_LABELS: Record<RoomCampus, string> = {
+  "36 Xuân La": "Cơ sở 36 Xuân La",
+  "371 Nguyễn Hoàng Tôn": "Cơ sở 371 Nguyễn Hoàng Tôn",
+  "77 NCT": "Cơ sở 77 Nguyễn Chí Thanh",
+};
+
+function buildingLabel(building: string): string {
+  if (building === "HoiTruong") return "Hội trường";
+  const match = building.match(/^36XL-([A-Z])$/);
+  return match ? `Tòa ${match[1]}` : building;
+}
 
 function getDefaultDay(): number {
   const today = new Date().getDay() + 1;
@@ -44,6 +59,9 @@ export function RoomManagementPanel() {
   const [requests, setRequests] = useState<BorrowRequest[]>([]);
   const [selectedDay, setSelectedDay] = useState(getDefaultDay);
   const [selectedShift, setSelectedShift] = useState<Shift>("morning");
+  const [selectedCampus, setSelectedCampus] =
+    useState<CampusSelection>("all");
+  const [selectedBuilding, setSelectedBuilding] = useState("all");
 
   useEffect(() => {
     const refreshAllocation = () => {
@@ -83,21 +101,52 @@ export function RoomManagementPanel() {
         isBorrowRequestInWeek(request),
     );
 
-    return SHEET_ROOMS.map((room) => ({
-      room,
-      classes: assignments
-        .filter((assignment) => assignment.roomId === room.id)
-        .map((assignment) => ({
-          assignment,
-          classInfo: classById.get(assignment.classId),
-        })),
-      borrowings: approvedBorrowings.filter(
-        (request) => request.roomId === room.id,
-      ),
-    })).sort((a, b) =>
-      a.room.name.localeCompare(b.room.name, "vi", { numeric: true }),
-    );
-  }, [requests, selectedDay, selectedShift, snapshot]);
+    return SHEET_ROOMS.filter(
+      (room) =>
+        (selectedCampus === "all" || room.campus === selectedCampus) &&
+        (selectedCampus !== "36 Xuân La" ||
+          selectedBuilding === "all" ||
+          room.building === selectedBuilding),
+    )
+      .map((room) => ({
+        room,
+        classes: assignments
+          .filter((assignment) => assignment.roomId === room.id)
+          .map((assignment) => ({
+            assignment,
+            classInfo: classById.get(assignment.classId),
+          })),
+        borrowings: approvedBorrowings.filter(
+          (request) => request.roomId === room.id,
+        ),
+      }))
+      .sort((a, b) =>
+        a.room.name.localeCompare(b.room.name, "vi", { numeric: true }),
+      );
+  }, [
+    requests,
+    selectedBuilding,
+    selectedCampus,
+    selectedDay,
+    selectedShift,
+    snapshot,
+  ]);
+
+  const towerOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          SHEET_ROOMS.filter((room) => room.campus === "36 Xuân La")
+            .map((room) => room.building)
+            .filter(
+              (building): building is string =>
+                Boolean(building && /^36XL-[A-Z]$/.test(building)) ||
+                building === "HoiTruong",
+            ),
+        ),
+      ].sort((a, b) => a.localeCompare(b, "vi", { numeric: true })),
+    [],
+  );
 
   const assignedRooms = roomRows.filter(
     (row) => row.classes.length > 0 || row.borrowings.length > 0,
@@ -140,7 +189,44 @@ export function RoomManagementPanel() {
               Xem phòng đã xếp lịch và phòng còn trống theo ngày, ca học.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div
+            className={`grid gap-2 ${selectedCampus === "36 Xuân La" ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3"}`}
+          >
+            <label className="text-xs font-semibold text-slate-600">
+              Cơ sở
+              <select
+                value={selectedCampus}
+                onChange={(event) => {
+                  setSelectedCampus(event.target.value as CampusSelection);
+                  setSelectedBuilding("all");
+                }}
+                className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"
+              >
+                <option value="all">Tất cả cơ sở</option>
+                {Object.entries(CAMPUS_LABELS).map(([campus, label]) => (
+                  <option key={campus} value={campus}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedCampus === "36 Xuân La" && (
+              <label className="text-xs font-semibold text-slate-600">
+                Tòa
+                <select
+                  value={selectedBuilding}
+                  onChange={(event) => setSelectedBuilding(event.target.value)}
+                  className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"
+                >
+                  <option value="all">Tất cả tòa</option>
+                  {towerOptions.map((building) => (
+                    <option key={building} value={building}>
+                      {buildingLabel(building)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="text-xs font-semibold text-slate-600">
               Thứ
               <select
@@ -229,7 +315,7 @@ export function RoomManagementPanel() {
                 <div className="space-y-3">
                   {assignedRooms.map(({ room, classes, borrowings }) => (
                     <article
-                      key={room.id}
+                      key={`${room.campus ?? "unknown"}-${room.building ?? "unknown"}-${room.id}`}
                       className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm"
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -328,7 +414,7 @@ export function RoomManagementPanel() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   {freeRooms.map(({ room }) => (
                     <article
-                      key={room.id}
+                      key={`${room.campus ?? "unknown"}-${room.building ?? "unknown"}-${room.id}`}
                       className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4"
                     >
                       <div className="flex items-center justify-between gap-2">

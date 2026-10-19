@@ -32,10 +32,11 @@ import {
   type CohortFilter,
   DAYS,
   DAY_LABELS,
-  DAY_SHORT,
   SHIFTS,
   SHIFT_LABELS,
   SHIFT_PERIODS,
+  classImportIdentityKey,
+  classImportKey,
   createClassId,
   autoSchedule,
   findAlternatives,
@@ -43,16 +44,16 @@ import {
   CAMPUS_LABELS,
   COHORT_LABELS,
   removeClassFromSchedule,
-  schedulePendingClasses,
 } from "@/lib/scheduling";
 import { SHEET_CLASSES, SHEET_ROOMS } from "@/lib/schedule-data";
-import { TimetableUpload } from "@/components/timetable-upload";
+import { TimetableUpload, type ImportMode } from "@/components/timetable-upload";
 import type { ImportedClass } from "@/lib/timetable-import";
 import {
   getCourseCredits,
   getCourseMeetingTimelines,
 } from "@/lib/course-timing";
 import {
+  ALLOCATION_ALGORITHM_VERSION,
   clearAllocationSnapshot,
   clearImportedClasses,
   loadImportedClasses,
@@ -84,24 +85,44 @@ type ImportState = {
 };
 
 const IMPORT_COLUMNS = {
-  name: ["tenmon", "monhoc", "tenlop", "hocphan", "subject", "name"],
-  size: ["siso", "soluong", "soluongsinhvien", "size", "capacity"],
+  name: ["tenmon", "tenmonhoc", "monhoc", "tenhocphan", "hocphan", "subject", "name"],
+  size: [
+    "siso",
+    "sisolop",
+    "soluong",
+    "soluongsinhvien",
+    "soluongsinhvienlop",
+    "soluongsinhvienhocphan",
+    "soluongsinhvien dangky",
+    "soluongsinhviendangky",
+    "sosv",
+    "soluongsv",
+    "soluonghocvien",
+    "quymo",
+    "quymolop",
+    "students",
+    "studentcount",
+    "classsize",
+    "enrollment",
+    "capacity",
+  ],
   day: ["thu", "ngayhoc", "day"],
   shift: ["ca", "cahoc", "shift"],
-  periods: ["sotiet", "sotiet hoc", "periods", "duration"],
-  startPeriod: ["tietbatdau", "tietbd", "startperiod"],
-  endPeriod: ["tietketthuc", "tietkt", "endperiod"],
+  periods: ["sotiet", "sotiethoc", "sotiethocphan", "sotiethocnay", "sotiettrongtuan", "sotiettoida", "sotiethoctoida", "periods", "duration"],
+  startPeriod: ["tietbatdau", "tietbd", "tutiet", "startperiod"],
+  endPeriod: ["tietketthuc", "tietkt", "dentiet", "endperiod"],
   cohort: ["khoa", "khoahoc", "cohort"],
-  courseCode: ["mamon", "magv", "coursecode", "code"],
+  courseCode: ["mamon", "mahocphan", "magv", "coursecode", "code"],
   major: ["nganh", "major"],
   className: ["malop", "tenlop", "classname", "class"],
-  section: ["nhom", "section"],
+  section: ["nhom", "lopso", "solop", "section", "groupnumber"],
 } as const;
 
 function normalizeImportHeader(value: unknown): string {
   return String(value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/gi, "d")
     .toLocaleLowerCase()
     .replace(/[^a-z0-9]/g, "");
 }
@@ -110,15 +131,29 @@ function importValue(
   row: Record<string, unknown>,
   aliases: readonly string[],
 ): unknown {
-  const key = Object.keys(row).find((item) =>
-    aliases.includes(normalizeImportHeader(item)),
-  );
+  const key = Object.keys(row).find((item) => {
+    const normalized = normalizeImportHeader(item);
+    if (aliases.includes(normalized)) return true;
+    return (
+      aliases === IMPORT_COLUMNS.periods &&
+      /^sotiet(?:hoc)?(?:hocphan|hocnay|trongtuan)?toida\d*$/.test(
+        normalized,
+      )
+    );
+  });
   return key ? row[key] : undefined;
 }
 
 function numericImportValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  const parsed = Number(String(value ?? "").replace(",", ".").trim());
+  const text = String(value ?? "").trim();
+  const match = text.match(/\d[\d.,]*/);
+  if (!match) return null;
+  const token = match[0];
+  const normalized = /^\d{1,3}(?:[.,]\d{3})+$/.test(token)
+    ? token.replace(/[.,]/g, "")
+    : token.replace(",", ".");
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -130,7 +165,7 @@ function parseImportedRows(rows: Record<string, unknown>[]): {
   const previews: ImportPreviewRow[] = [];
   const classes: ClassInfo[] = [];
   const errors: string[] = [];
-  const seenNames = new Set<string>();
+  const seenClassKeys = new Set<string>();
   const validShifts = new Set<Shift>(SHIFTS);
   const shiftAliases: Record<string, Shift> = {
     sang: "morning",
@@ -146,7 +181,7 @@ function parseImportedRows(rows: Record<string, unknown>[]): {
     const name = String(importValue(row, IMPORT_COLUMNS.name) ?? "").trim();
     const size = numericImportValue(importValue(row, IMPORT_COLUMNS.size));
     const day = numericImportValue(importValue(row, IMPORT_COLUMNS.day));
-    const periods = numericImportValue(
+    const importedPeriods = numericImportValue(
       importValue(row, IMPORT_COLUMNS.periods),
     );
     const rawShift = normalizeImportHeader(
@@ -159,7 +194,29 @@ function parseImportedRows(rows: Record<string, unknown>[]): {
     const endPeriod = numericImportValue(
       importValue(row, IMPORT_COLUMNS.endPeriod),
     );
-    const normalizedName = name.toLocaleLowerCase();
+    const periods =
+      importedPeriods ??
+      (startPeriod !== null && endPeriod !== null
+        ? endPeriod - startPeriod + 1
+        : null);
+    const className = String(
+      importValue(row, IMPORT_COLUMNS.className) ?? "",
+    ).trim();
+    const section = String(importValue(row, IMPORT_COLUMNS.section) ?? "").trim();
+    const normalizedClassName =
+      className && section && !className.endsWith(`.${section}`)
+        ? `${className}.${section}`
+        : className;
+    const classKey = classImportKey({
+      name,
+      courseCode: String(importValue(row, IMPORT_COLUMNS.courseCode) ?? "").trim(),
+      className: normalizedClassName || undefined,
+      section: section || undefined,
+      day: day ?? 0,
+      shift: shift ?? "morning",
+      startPeriod: startPeriod ?? undefined,
+      endPeriod: endPeriod ?? undefined,
+    });
 
     if (!name) rowErrors.push("Thiếu tên môn/lớp");
     if (size === null || size <= 0 || !Number.isInteger(size))
@@ -183,8 +240,8 @@ function parseImportedRows(rows: Record<string, unknown>[]): {
         endPeriod - startPeriod + 1 !== periods)
     )
       rowErrors.push("Khoảng tiết bắt đầu/kết thúc không hợp lệ");
-    if (seenNames.has(normalizedName)) rowErrors.push("Trùng môn/lớp trong file");
-    if (name) seenNames.add(normalizedName);
+    if (seenClassKeys.has(classKey)) rowErrors.push("Trùng mã lớp trong file");
+    if (name) seenClassKeys.add(classKey);
 
     const classInfo =
       rowErrors.length === 0
@@ -213,20 +270,8 @@ function parseImportedRows(rows: Record<string, unknown>[]): {
             ...(String(importValue(row, IMPORT_COLUMNS.major) ?? "").trim()
               ? { major: String(importValue(row, IMPORT_COLUMNS.major)).trim() }
               : {}),
-            ...(String(importValue(row, IMPORT_COLUMNS.className) ?? "").trim()
-              ? {
-                  className: String(
-                    importValue(row, IMPORT_COLUMNS.className),
-                  ).trim(),
-                }
-              : {}),
-            ...(String(importValue(row, IMPORT_COLUMNS.section) ?? "").trim()
-              ? {
-                  section: String(
-                    importValue(row, IMPORT_COLUMNS.section),
-                  ).trim(),
-                }
-              : {}),
+            ...(normalizedClassName ? { className: normalizedClassName } : {}),
+            ...(section ? { section } : {}),
           }
         : undefined;
     const preview: ImportPreviewRow = {
@@ -369,7 +414,11 @@ export function AdminScheduler() {
     const snapshot = loadAllocationSnapshot();
     if (!snapshot) return;
     setClasses(snapshot.classes);
-    setResult(snapshot.result);
+    setResult(
+      snapshot.algorithmVersion === ALLOCATION_ALGORITHM_VERSION
+        ? snapshot.result
+        : autoSchedule(snapshot.classes, ROOMS),
+    );
     setNewClassIds(
       snapshot.classes
         .filter((item) => !SHEET_CLASSES.some((base) => base.id === item.id))
@@ -378,7 +427,13 @@ export function AdminScheduler() {
   }, []);
 
   useEffect(() => {
-    if (result) saveAllocationSnapshot({ classes, result });
+    if (result) {
+      saveAllocationSnapshot({
+        classes,
+        result,
+        algorithmVersion: ALLOCATION_ALGORITHM_VERSION,
+      });
+    }
   }, [classes, result]);
 
   const roomById = useMemo(() => {
@@ -440,11 +495,7 @@ export function AdminScheduler() {
   );
 
   function handleSchedule() {
-    setResult((current) =>
-      current
-        ? schedulePendingClasses(classes, ROOMS, current)
-        : autoSchedule(classes, ROOMS),
-    );
+    setResult(autoSchedule(classes, ROOMS));
   }
 
   async function handleImportFile(file: File | undefined) {
@@ -530,7 +581,7 @@ export function AdminScheduler() {
               {
                 classInfo: newClass,
                 reason:
-                  "Lớp mới đang chờ xếp. Bấm “Sắp xếp tự động” để tìm phòng và tiết còn trống; các lịch đã xếp sẽ được giữ nguyên.",
+                  "Lớp mới đang chờ phân bổ. Bấm “Sắp xếp tự động” để tối ưu lại phòng cho toàn bộ thời khóa biểu.",
               },
             ],
           }
@@ -540,21 +591,131 @@ export function AdminScheduler() {
     return null;
   }
 
-  function handleImportClasses(importedClasses: ImportedClass[]) {
-    const existingNames = new Set(
-      classes.map((item) => item.name.trim().toLocaleLowerCase()),
+  function handleImportClasses(
+    importedClasses: ImportedClass[],
+    mode: ImportMode,
+  ) {
+    if (mode === "replace") {
+      const nextClasses: ClassInfo[] = [];
+      const ids = new Set<string>();
+      for (const importedClass of importedClasses) {
+        let id = createClassId();
+        while (ids.has(id)) {
+          id = createClassId();
+        }
+        ids.add(id);
+        nextClasses.push({ ...importedClass, id });
+      }
+
+      const nextResult = autoSchedule(nextClasses, ROOMS);
+      saveImportedClasses(nextClasses);
+      clearAllocationSnapshot();
+      setClasses(nextClasses);
+      setResult(nextResult);
+      setNewClassIds(nextClasses.map((classInfo) => classInfo.id));
+
+      return {
+        added: nextClasses.length,
+        updated: [],
+        duplicates: [],
+      };
+    }
+
+    const existingByKey = new Map(
+      classes.map((item) => [classImportKey(item), item]),
     );
+    const existingByIdentity = new Map<string, ClassInfo[]>();
+    for (const classInfo of classes) {
+      const identity = classImportIdentityKey(classInfo);
+      if (!identity) continue;
+      const matches = existingByIdentity.get(identity) ?? [];
+      matches.push(classInfo);
+      existingByIdentity.set(identity, matches);
+    }
     const accepted: ClassInfo[] = [];
-    const duplicates: string[] = [];
+    const updated: ClassInfo[] = [];
+    const seenKeys = new Set<string>();
+    const claimedExistingIds = new Set<string>();
+    const duplicates: { key: string; label: string }[] = [];
 
     for (const importedClass of importedClasses) {
-      const normalizedName = importedClass.name.trim().toLocaleLowerCase();
-      if (existingNames.has(normalizedName)) {
-        duplicates.push(importedClass.name);
+      const classKey = classImportKey(importedClass);
+      const exactExisting = existingByKey.get(classKey);
+      const identity = classImportIdentityKey(importedClass);
+      const sameIdentity = identity
+        ? existingByIdentity.get(identity) ?? []
+        : [];
+      const compatibleLegacy = sameIdentity.filter(
+        (item) =>
+          !claimedExistingIds.has(item.id) &&
+          (item.day === importedClass.day ||
+            item.needsReview?.includes("thứ")) &&
+          (item.shift === importedClass.shift ||
+            item.needsReview?.includes("ca học")) &&
+          (!Number.isInteger(item.startPeriod) ||
+            !Number.isInteger(item.endPeriod) ||
+            !Number.isInteger(importedClass.startPeriod) ||
+            !Number.isInteger(importedClass.endPeriod) ||
+            (item.startPeriod === importedClass.startPeriod &&
+              item.endPeriod === importedClass.endPeriod)),
+      );
+      const existingClass =
+        exactExisting ??
+        (compatibleLegacy.length === 1 ? compatibleLegacy[0] : undefined);
+      if (existingClass && !seenKeys.has(classKey)) {
+        claimedExistingIds.add(existingClass.id);
+        const refreshedClass: ClassInfo = {
+          ...importedClass,
+          id: existingClass.id,
+          needsReview: importedClass.needsReview,
+        };
+        const fields: (keyof ClassInfo)[] = [
+          "name",
+          "size",
+          "day",
+          "shift",
+          "periods",
+          "startPeriod",
+          "endPeriod",
+          "courseCode",
+          "className",
+          "section",
+          "cohort",
+          "major",
+          "needsReview",
+        ];
+        const changed = fields.some(
+          (field) =>
+            JSON.stringify(existingClass[field]) !==
+            JSON.stringify(refreshedClass[field]),
+        );
+        if (changed) {
+          updated.push(refreshedClass);
+          existingByKey.set(classKey, refreshedClass);
+        } else {
+          duplicates.push({
+            key: classKey,
+            label:
+              [importedClass.courseCode, importedClass.className]
+                .filter(Boolean)
+                .join(" · ") || importedClass.name,
+          });
+        }
+        seenKeys.add(classKey);
+        continue;
+      }
+      if (seenKeys.has(classKey) || existingClass) {
+        duplicates.push({
+          key: classKey,
+          label:
+            [importedClass.courseCode, importedClass.className]
+              .filter(Boolean)
+              .join(" · ") || importedClass.name,
+        });
         continue;
       }
 
-      existingNames.add(normalizedName);
+      seenKeys.add(classKey);
       let id = createClassId();
       while (
         classes.some((item) => item.id === id) ||
@@ -565,33 +726,60 @@ export function AdminScheduler() {
       accepted.push({ ...importedClass, id });
     }
 
-    if (accepted.length === 0) return { added: 0, duplicates };
+    if (accepted.length === 0 && updated.length === 0) {
+      return { added: 0, updated: [], duplicates };
+    }
 
-    const nextClasses = [...classes, ...accepted];
+    const updatedById = new Map(updated.map((classInfo) => [classInfo.id, classInfo]));
+    const nextClasses = [
+      ...classes.map((classInfo) => updatedById.get(classInfo.id) ?? classInfo),
+      ...accepted,
+    ];
     setClasses(nextClasses);
     setNewClassIds((current) => [
       ...current,
+      ...updated.map((classInfo) => classInfo.id),
       ...accepted.map((classInfo) => classInfo.id),
     ]);
     setResult((current) =>
       current
         ? {
             ...current,
+            assignments: current.assignments.filter(
+              (assignment) => !updatedById.has(assignment.classId),
+            ),
             unassigned: [
-              ...current.unassigned,
+              ...current.unassigned.filter(
+                (item) => !updatedById.has(item.classInfo.id),
+              ),
+              ...updated.map((classInfo) => ({
+                classInfo,
+                reason:
+                  "Thông tin lớp vừa được cập nhật. Bấm “Sắp xếp tự động” để phân bổ lại toàn bộ phòng.",
+              })),
               ...accepted.map((classInfo) => ({
                 classInfo,
                 reason:
                   classInfo.size < 1 || classInfo.needsReview?.length
                     ? `Chưa thể xếp phòng cho lớp này: cần bổ sung ${classInfo.needsReview?.join(", ") || "sĩ số"} trước.`
-                    : "Lớp mới nhập đang chờ xếp. Bấm “Sắp xếp tự động” để tìm phòng và tiết còn trống.",
+                    : "Lớp mới nhập đang chờ phân bổ. Bấm “Sắp xếp tự động” để tối ưu lại phòng cho toàn bộ thời khóa biểu.",
               })),
             ],
           }
         : autoSchedule(nextClasses, ROOMS),
     );
 
-    return { added: accepted.length, duplicates };
+    return {
+      added: accepted.length,
+      updated: updated.map((classInfo) => ({
+        key: classImportKey(classInfo),
+        label:
+          [classInfo.courseCode, classInfo.className]
+            .filter(Boolean)
+            .join(" · ") || classInfo.name,
+      })),
+      duplicates,
+    };
   }
 
   function handleRemoveClass(id: string) {
@@ -814,7 +1002,10 @@ export function AdminScheduler() {
 
   return (
     <div className="space-y-6">
-      <TimetableUpload onImport={handleImportClasses} />
+      <TimetableUpload
+        onImport={handleImportClasses}
+        currentClassCount={classes.length}
+      />
       <AddClassForm onAdd={handleAddClass} />
 
       <section
@@ -866,8 +1057,8 @@ export function AdminScheduler() {
               khả dụng
             </p>
             <p className="text-xs text-muted-foreground">
-              Sau khi phân bổ, các lịch được lưu cố định. Lớp mới chỉ được xếp
-              vào tiết còn trống, không thay đổi phòng của các lớp đã xếp.
+              Chạy lại sẽ tối ưu phân bổ phòng cho toàn bộ lớp; thứ, ca và tiết
+              cố định trong thời khóa biểu được giữ nguyên.
             </p>
           </div>
         </div>
@@ -1762,6 +1953,10 @@ function NewClassesPanel({
             ? ROOMS.find((room) => room.id === assignment.roomId)
             : undefined;
           const isAssigned = Boolean(assignment);
+          const displayDay = assignment?.day ?? classInfo.day;
+          const displayShift = assignment?.shift ?? classInfo.shift;
+          const displayStart = assignment?.startPeriod ?? classInfo.startPeriod;
+          const displayEnd = assignment?.endPeriod ?? classInfo.endPeriod;
           return (
             <li
               key={classInfo.id}
@@ -1771,12 +1966,41 @@ function NewClassesPanel({
                 <p className="truncate text-sm font-semibold text-foreground">
                   {classInfo.name}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {classInfo.size > 0 ? `${classInfo.size} SV` : "Chưa nhập sĩ số"} ·{" "}
-                  {classInfo.needsReview?.some((field) => field !== "sĩ số")
-                    ? `Cần bổ sung ${classInfo.needsReview.filter((field) => field !== "sĩ số").join(", ")}`
-                    : `${DAY_SHORT[classInfo.day]} · ${SHIFT_LABELS[classInfo.shift]} · ${classInfo.periods} tiết`}
-                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>
+                    {classInfo.size > 0
+                      ? `${classInfo.size} SV`
+                      : "Chưa nhập sĩ số"}
+                  </span>
+                  {!classInfo.needsReview?.some(
+                    (field) => field !== "sĩ số",
+                  ) && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{DAY_LABELS[displayDay]}</span>
+                      <span
+                        className="rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-800"
+                      >
+                        Ca {SHIFT_LABELS[displayShift]}
+                      </span>
+                      <span>
+                        {displayStart && displayEnd
+                          ? `Tiết ${displayStart}–${displayEnd}`
+                          : `${classInfo.periods} tiết`}
+                      </span>
+                    </>
+                  )}
+                  {classInfo.needsReview?.some(
+                    (field) => field !== "sĩ số",
+                  ) && (
+                    <span className="font-medium text-amber-700">
+                      Cần bổ sung{" "}
+                      {classInfo.needsReview
+                        .filter((field) => field !== "sĩ số")
+                        .join(", ")}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
                 <span
@@ -2010,6 +2234,19 @@ function UnassignedPanel({
   result: ScheduleResult;
   onPlace: (classInfo: ClassInfo, alt: AltSlot) => void;
 }) {
+  const missingInfoCount = result.unassigned.filter(
+    ({ classInfo }) =>
+      classInfo.size < 1 || Boolean(classInfo.needsReview?.length),
+  ).length;
+  const pendingRescheduleCount = result.unassigned.filter(
+    ({ classInfo, reason }) =>
+      classInfo.size >= 1 &&
+      !classInfo.needsReview?.length &&
+      reason.includes("Bấm “Sắp xếp tự động”"),
+  ).length;
+  const noRoomCount =
+    result.unassigned.length - missingInfoCount - pendingRescheduleCount;
+
   if (result.unassigned.length === 0) {
     return (
       <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-5">
@@ -2033,6 +2270,29 @@ function UnassignedPanel({
           {result.unassigned.length} lớp chưa xếp được (bị đẩy ra ngoài)
         </h3>
       </div>
+      <div className="mb-4 grid gap-2 text-sm sm:grid-cols-3">
+        <p className="rounded-lg bg-white/70 px-3 py-2 text-red-800">
+          Thiếu sĩ số/thứ/ca/tiết: <strong>{missingInfoCount}</strong>
+        </p>
+        <p className="rounded-lg bg-white/70 px-3 py-2 text-amber-800">
+          Chờ chạy lại phân bổ: <strong>{pendingRescheduleCount}</strong>
+        </p>
+        <p className="rounded-lg bg-white/70 px-3 py-2 text-slate-700">
+          Không còn phòng trống: <strong>{noRoomCount}</strong>
+        </p>
+      </div>
+      {missingInfoCount > 0 && (
+        <p className="mb-4 text-sm text-red-800">
+          Các lớp thiếu thông tin không thể được xếp bằng cách đổi thuật toán.
+          Hãy nhập lại tệp thời khóa biểu có đủ sĩ số, thứ, ca học và tiết học.
+        </p>
+      )}
+      {pendingRescheduleCount > 0 && (
+        <p className="mb-4 text-sm text-amber-900">
+          Có lớp vừa được nhập hoặc cập nhật; bấm “Sắp xếp tự động” để tính lại
+          toàn bộ thời khóa biểu.
+        </p>
+      )}
       <ul className="flex flex-col gap-3">
         {result.unassigned.map((u) => (
           <UnassignedItem
@@ -2079,7 +2339,7 @@ function UnassignedItem({
             <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               {classInfo.needsReview?.some((field) => field !== "sĩ số")
                 ? `Cần bổ sung ${classInfo.needsReview.filter((field) => field !== "sĩ số").join(", ")}`
-                : `${DAY_SHORT[classInfo.day]} · ${SHIFT_LABELS[classInfo.shift]} · ${classInfo.periods} tiết`}
+                : `${DAY_LABELS[classInfo.day]} · Ca ${SHIFT_LABELS[classInfo.shift]} · ${classInfo.startPeriod && classInfo.endPeriod ? `tiết ${classInfo.startPeriod}–${classInfo.endPeriod}` : `${classInfo.periods} tiết`}`}
             </span>
           </div>
           <p className="mt-1 text-xs text-red-700">{reason}</p>

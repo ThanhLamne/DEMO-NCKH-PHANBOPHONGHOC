@@ -2,15 +2,23 @@
 
 import { useRef, useState } from "react"
 import { FileUp, LoaderCircle, Trash2, Upload, X } from "lucide-react"
-import { DAY_LABELS, SHIFT_LABELS } from "@/lib/scheduling"
+import { classImportKey, DAY_LABELS, SHIFT_LABELS } from "@/lib/scheduling"
 import type { ImportedClass, ImportIssue } from "@/lib/timetable-import"
 
-type ImportSummary = { added: number; duplicates: string[] }
+type ImportSummary = {
+  added: number
+  updated: { key: string; label: string }[]
+  duplicates: { key: string; label: string }[]
+}
+
+export type ImportMode = "replace" | "merge"
 
 export function TimetableUpload({
   onImport,
+  currentClassCount,
 }: {
-  onImport: (classes: ImportedClass[]) => ImportSummary
+  onImport: (classes: ImportedClass[], mode: ImportMode) => ImportSummary
+  currentClassCount: number
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState("")
@@ -52,29 +60,55 @@ export function TimetableUpload({
     }
   }
 
-  function importClasses() {
+  function importClasses(mode: ImportMode) {
+    if (
+      mode === "replace" &&
+      !window.confirm(
+        `Thay toàn bộ ${currentClassCount} lớp hiện tại bằng ${classes.length} lớp trong file này? Thao tác này không thể tự khôi phục lịch cũ.`,
+      )
+    ) {
+      return
+    }
+
     const incompleteCount = classes.filter(
       (classInfo) => classInfo.needsReview?.length,
     ).length
-    const summary = onImport(classes)
-    const importedNames = new Set(summary.duplicates)
+    const summary = onImport(classes, mode)
+    if (mode === "replace") {
+      setClasses([])
+    }
+    const importedKeys = new Set(
+      [...summary.duplicates, ...summary.updated].map((item) => item.key),
+    )
     setClasses((current) =>
-      current.filter((classInfo) => !importedNames.has(classInfo.name)),
+      current.filter((classInfo) => !importedKeys.has(classImportKey(classInfo))),
     )
     if (summary.duplicates.length > 0) {
       setIssues((current) => [
         ...current,
-        ...summary.duplicates.map((name) => ({
+        ...summary.duplicates.map(({ label }) => ({
           row: 0,
-          source: name,
+          source: label,
           message: "Bỏ qua vì lớp này đã có trong thời khóa biểu.",
         })),
       ])
     }
-    setNotice(
+    const changes = [
       summary.added > 0
-        ? `Đã thêm ${summary.added} lớp vào thời khóa biểu. Lớp mới được giữ ở trạng thái chờ xếp nếu lịch đã chốt.${incompleteCount > 0 ? ` ${incompleteCount} lớp còn thiếu thông tin nên sẽ chưa được xếp phòng.` : ""}`
-        : "Không có lớp mới được thêm; các lớp đọc được đều đã tồn tại.",
+        ? mode === "replace"
+          ? `Đã thay thời khóa biểu bằng ${summary.added} lớp`
+          : `Đã thêm ${summary.added} lớp`
+        : "",
+      summary.updated.length > 0
+        ? `đã cập nhật ${summary.updated.length} lớp đã có`
+        : "",
+    ].filter(Boolean)
+    setNotice(
+      changes.length > 0
+        ? mode === "replace"
+          ? `${changes.join(" và ")}. Hệ thống đã phân bổ lại theo dữ liệu trong file.${incompleteCount > 0 ? ` ${incompleteCount} lớp còn thiếu thông tin nên sẽ chưa được xếp phòng.` : ""}`
+          : `${changes.join(" và ")} vào thời khóa biểu. Bấm “Sắp xếp tự động” để tối ưu lại phòng.${incompleteCount > 0 ? ` ${incompleteCount} lớp còn thiếu thông tin nên sẽ chưa được xếp phòng.` : ""}`
+        : "Không có lớp mới hoặc thay đổi; các lớp đọc được đều đã tồn tại.",
     )
   }
 
@@ -95,9 +129,11 @@ export function TimetableUpload({
               trước khi thêm vào lịch.
             </p>
             <p className="mt-2 text-[11px] leading-5 text-slate-500">
-              Nên có tiêu đề cột: Tên môn học, Mã lớp (không bắt buộc), Sĩ số
-              (có thể để trống), Thứ, Ca, Tiết hoặc Từ/Đến. Ảnh/PDF scan cần
-              rõ nét; OCR có thể cần kiểm tra lại.
+              Nên có tiêu đề cột: Tên học phần, Mã học phần, Tên lớp, Lớp số,
+              Sĩ số (hoặc Số lượng sinh viên/Số SV), Số tiết học hoặc Từ
+              tiết/Đến tiết, Thứ và Ca học. Số tín chỉ không được dùng thay
+              cho số tiết. Ảnh/PDF scan cần rõ nét;
+              OCR có thể cần kiểm tra lại.
             </p>
           </div>
         </div>
@@ -138,7 +174,7 @@ export function TimetableUpload({
       {progress && (
         <div className="mt-4 rounded-xl border border-indigo-200 bg-white p-3">
           <div className="flex items-center justify-between gap-3 text-xs text-slate-600">
-            <span>{progress.message}</span>
+            <span className="whitespace-nowrap">{progress.message}</span>
             <span>{progress.percent}%</span>
           </div>
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-indigo-100">
@@ -173,46 +209,66 @@ export function TimetableUpload({
                 đến khi bổ sung đủ dữ liệu.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={importClasses}
-              className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800"
-            >
-              Thêm {classes.length} lớp vào TKB
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => importClasses("replace")}
+                className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800"
+              >
+                Dùng riêng {classes.length} lớp này
+              </button>
+              <button
+                type="button"
+                onClick={() => importClasses("merge")}
+                className="rounded-xl border border-emerald-300 bg-white px-4 py-2.5 text-sm font-bold text-emerald-800 hover:bg-emerald-50"
+              >
+                Gộp thêm vào lịch hiện tại
+              </button>
+            </div>
           </div>
 
           <div className="max-h-80 overflow-auto rounded-xl border border-slate-200 bg-white">
-            <table className="w-full min-w-[760px] border-collapse text-left text-xs">
+            <table className="w-full min-w-[760px] table-fixed border-collapse text-center text-xs">
+              <colgroup>
+                <col className="w-[24%]" />
+                <col className="w-[31%]" />
+                <col className="w-[10%]" />
+                <col className="w-[27%]" />
+                <col className="w-[8%]" />
+              </colgroup>
               <thead className="sticky top-0 bg-slate-100 text-slate-700">
                 <tr>
-                  <th className="px-3 py-2.5">Môn / học phần</th>
-                  <th className="px-3 py-2.5">Mã / lớp</th>
-                  <th className="px-3 py-2.5">Sĩ số</th>
-                  <th className="px-3 py-2.5">Thời gian</th>
-                  <th className="px-3 py-2.5">Thao tác</th>
+                  <th className="px-3 py-2.5 text-center">Môn / học phần</th>
+                  <th className="px-3 py-2.5 text-center">Mã / lớp</th>
+                  <th className="whitespace-nowrap px-3 py-2.5">Sĩ số</th>
+                  <th className="px-3 py-2.5 text-center">Thời gian</th>
+                  <th className="px-3 py-2.5 text-center">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {classes.map((classInfo, index) => (
                   <tr key={`${classInfo.name}-${index}`} className="text-slate-700">
-                    <td className="px-3 py-2.5 font-semibold">{classInfo.name}</td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-2.5 text-center font-semibold">{classInfo.name}</td>
+                    <td className="truncate px-3 py-2.5 text-center" title={
+                      [classInfo.courseCode, classInfo.className, classInfo.cohort]
+                        .filter(Boolean)
+                        .join(" · ") || "—"
+                    }>
                       {[classInfo.courseCode, classInfo.className, classInfo.cohort]
                         .filter(Boolean)
                         .join(" · ") || "—"}
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="whitespace-nowrap px-3 py-2.5 text-center tabular-nums">
                       {classInfo.size > 0 ? classInfo.size : (
                         <span className="font-semibold text-amber-700">Chưa nhập</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-2.5 text-center">
                       {classInfo.needsReview?.some((field) => field !== "sĩ số")
                         ? `Thiếu ${classInfo.needsReview.filter((field) => field !== "sĩ số").join(", ")}`
                         : `${DAY_LABELS[classInfo.day]} · ${SHIFT_LABELS[classInfo.shift]} · tiết ${classInfo.startPeriod}–${classInfo.endPeriod}`}
                     </td>
-                    <td className="px-3 py-2.5">
+                    <td className="px-3 py-2.5 text-center">
                       <button
                         type="button"
                         aria-label={`Bỏ lớp ${classInfo.name} khỏi bản xem trước`}

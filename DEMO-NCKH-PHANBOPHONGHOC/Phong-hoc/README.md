@@ -39,9 +39,14 @@ in a `NEXT_PUBLIC_` variable.
    - `ADMIN_INVITE_CODE` to a random secret of at least 24 characters.
 3. In Supabase Authentication URL Configuration, add the local and deployed
    portal URLs to the allowed redirect URLs (for example,
-   `http://localhost:3000/**` and your HTTPS deployment URL with `/**`).
-   Email confirmation redirects through `/auth/callback`.
-4. Restart the Next.js server after changing environment variables.
+   `http://localhost:3000/**`, `http://localhost:3001/**`, and your HTTPS
+   deployment URL with `/**`). Email confirmation and Google sign-in redirect
+   through `/auth/callback`.
+4. To enable Google sign-in for students, configure the Google provider under
+   **Authentication → Sign In / Providers → Google** in Supabase. Add the
+   Supabase callback URL shown there to the authorized redirect URIs in Google
+   Cloud, then save the Google client ID and secret in Supabase.
+5. Restart the Next.js server after changing environment variables.
 
 The database trigger assigns student/lecturer roles from the allowed signup
 metadata and grants the admin role only to accounts created by the protected

@@ -3,10 +3,12 @@ import type { ClassInfo, ScheduleResult } from "./scheduling"
 const STORAGE_KEY = "apag-allocation-snapshot-v1"
 const IMPORTED_CLASSES_KEY = "apag-imported-classes-v1"
 export const ALLOCATION_UPDATED_EVENT = "apag-allocation-updated"
+export const ALLOCATION_ALGORITHM_VERSION = 2
 
 export type AllocationSnapshot = {
   classes: ClassInfo[]
   result: ScheduleResult
+  algorithmVersion?: number
 }
 
 export function saveAllocationSnapshot(snapshot: AllocationSnapshot): void {

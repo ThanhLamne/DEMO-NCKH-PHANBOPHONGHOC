@@ -21,6 +21,7 @@ type ColumnName =
   | "endPeriod"
   | "cohort"
   | "major"
+  | "section"
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024
 const MAX_PDF_PAGES = 20
@@ -91,17 +92,22 @@ function parseCsv(text: string): string[][] {
 function columnFor(header: string): ColumnName | null {
   const value = normalize(header)
   if (/^(ten mon|ten mon hoc|mon hoc|ten hoc phan|hoc phan|course name|subject)$/.test(value)) return "name"
-  if (/^(lop|ten lop|ma lop|nhom|class|class name|section)$/.test(value)) return "className"
+  if (/^(lop|ten lop|ma lop|nhom|class|class name)$/.test(value)) return "className"
   if (/^(ma mon|ma hoc phan|course code|subject code)$/.test(value)) return "courseCode"
-  if (/(si so|so sinh vien|so sv|quy mo|student count|students)/.test(value)) return "size"
+  if (
+    /^(si so|si so sv|si so lop|si so sinh vien|si so du kien|so luong($| (sinh vien|sv|hoc vien|nguoi hoc))|so sinh vien|so sv|quy mo|student count|students|enrollment|class size)/.test(value)
+  ) {
+    return "size"
+  }
   if (/^(thu|thu hoc|ngay hoc|weekday|day)$/.test(value)) return "day"
   if (/^(ca|ca hoc|buoi|shift)$/.test(value)) return "shift"
-  if (/^(so tiet|number of periods|period count|duration)$/.test(value)) return "periodCount"
+  if (/^so tiet(?: hoc)?(?: hoc phan| hoc nay| tren tuan)?(?: toi da \d+)?$/.test(value) || /^(number of periods|period count|duration)$/.test(value)) return "periodCount"
   if (/^(tiet|tiet hoc|period|periods)$/.test(value)) return "period"
   if (/^(tiet bat dau|tiet bd|start period|period start)$/.test(value)) return "startPeriod"
   if (/^(tiet ket thuc|tiet kt|end period|period end)$/.test(value)) return "endPeriod"
-  if (/^(tu|from)$/.test(value)) return "startPeriod"
-  if (/^(den|to)$/.test(value)) return "endPeriod"
+  if (/^(tu|tu tiet|from|start period)$/.test(value)) return "startPeriod"
+  if (/^(den|den tiet|to|end period)$/.test(value)) return "endPeriod"
+  if (/^(lop so|so lop|section|group number)$/.test(value)) return "section"
   if (/^(khoa|khoa hoc|cohort|year)$/.test(value)) return "cohort"
   if (/^(nganh|major|department)$/.test(value)) return "major"
   return null
@@ -150,6 +156,22 @@ function periodCount(value: string): number | null {
   return numbers.length >= 2 ? Math.abs(numbers[1] - numbers[0]) + 1 : numbers[0] ?? null
 }
 
+function studentCount(value: string): number {
+  const cleaned = value.trim()
+  if (!cleaned) return 0
+
+  const match = cleaned.match(/\d[\d.,]*/)
+  if (!match) return 0
+
+  const token = match[0]
+  const normalized =
+    /^\d{1,3}(?:[.,]\d{3})+$/.test(token)
+      ? token.replace(/[.,]/g, "")
+      : token.replace(",", ".")
+  const parsed = Number(normalized)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
+}
+
 function mapRow(
   row: string[],
   columns: Map<ColumnName, number>,
@@ -160,8 +182,7 @@ function mapRow(
   const day = parseDay(get("day"))
   const parsedShift = parseShift(get("shift"))
   const sizeText = get("size").trim()
-  const parsedSize = Number(sizeText.replace(/[^\d]/g, ""))
-  const size = Number.isInteger(parsedSize) && parsedSize > 0 ? parsedSize : 0
+  const size = studentCount(sizeText)
   const explicitStart = periodRange(get("startPeriod"))
   const explicitEnd = periodRange(get("endPeriod"))
   const period = periodRange(get("period"))
@@ -215,8 +236,8 @@ function mapRow(
     candidateStart + (requestedPeriods ?? 1) - 1
   const validPeriodRange =
     hasPeriodDefinition &&
-    candidateStart >= minPeriod &&
-    candidateEnd <= maxPeriod &&
+    candidateStart >= 1 &&
+    candidateEnd <= 13 &&
     candidateEnd >= candidateStart
   if (hasPeriodDefinition && !validPeriodRange) needsReview.push("tiết học")
   const normalizedStart = validPeriodRange ? candidateStart : minPeriod
@@ -241,10 +262,17 @@ function mapRow(
     classInfo.endPeriod = normalizedEnd
   }
   const className = get("className").trim()
+  const section = get("section").trim()
   const courseCode = get("courseCode").trim()
   const cohort = get("cohort").trim().toUpperCase()
   const major = get("major").trim()
-  if (className) classInfo.className = className
+  if (className) {
+    const sectionSuffix = section ? `.${section}` : ""
+    classInfo.className = section && !className.endsWith(sectionSuffix)
+      ? `${className}${sectionSuffix}`
+      : className
+  }
+  if (section) classInfo.section = section
   if (courseCode) classInfo.courseCode = courseCode
   if (/^K2[3-6]$/.test(cohort)) classInfo.cohort = cohort as ImportedClass["cohort"]
   if (major) classInfo.major = major
@@ -325,34 +353,54 @@ export function parseTimetableRows(rows: string[][]): TimetableParseResult {
   const normalizedRows = rows
     .map((row) => row.map((cell) => cell.trim()))
     .filter((row) => row.some(Boolean))
-  const headerIndex = normalizedRows.findIndex(
-    (row) => row.map(columnFor).filter(Boolean).length >= 3,
-  )
-
-  if (headerIndex < 0) {
-    const classes: ImportedClass[] = []
-    const issues: ImportIssue[] = []
-    for (const [index, line] of rows.flat().entries()) {
-      const result = parseLooseLine(line, index + 1)
-      if (result.classInfo) classes.push(result.classInfo)
-      else if (result.issue) issues.push(result.issue)
-    }
-    return { classes, issues }
-  }
-
-  const columns = new Map<ColumnName, number>()
-  normalizedRows[headerIndex].forEach((header, index) => {
-    const field = columnFor(header)
-    if (field && !columns.has(field)) columns.set(field, index)
-  })
   const classes: ImportedClass[] = []
   const issues: ImportIssue[] = []
+  let columns: Map<ColumnName, number> | null = null
+  let foundHeader = false
 
-  normalizedRows.slice(headerIndex + 1).forEach((row, index) => {
-    const result = mapRow(row, columns, headerIndex + index + 2)
+  normalizedRows.forEach((row, index) => {
+    const headerColumns = new Map<ColumnName, number>()
+    row.forEach((header, columnIndex) => {
+      const field = columnFor(header)
+      if (field && !headerColumns.has(field)) {
+        headerColumns.set(field, columnIndex)
+      }
+    })
+
+    const isHeaderLike =
+      headerColumns.has("name") && headerColumns.size >= 3
+    if (isHeaderLike) {
+      foundHeader = true
+      columns = headerColumns
+      return
+    }
+
+    if (!columns) return
+    const hasMappedData = [...columns.entries()].some(
+      ([field, columnIndex]) =>
+        field !== "name" && Boolean(row[columnIndex]?.trim()),
+    )
+    if (!hasMappedData) return
+
+    const result = mapRow(row, columns, index + 1)
     if (result.classInfo) classes.push(result.classInfo)
     else if (result.issue) issues.push(result.issue)
   })
+
+  if (foundHeader) return { classes, issues }
+
+  for (const [index, row] of normalizedRows.entries()) {
+    const line = row.filter(Boolean).join(" | ")
+    const looksLikeTimetableLine =
+      /\b(?:thu|t)\s*(?:[2-7]|hai|ba|tu|nam|sau|bay)\b/i.test(line) &&
+      /\b(?:s[aá]ng|ch[ií]e[uù]|t[oó]i|morning|afternoon|evening)\b/i.test(line) &&
+      /(?:tiet|periods?)\s*\d+/i.test(line)
+    if (!looksLikeTimetableLine) continue
+
+    const result = parseLooseLine(line, index + 1)
+    if (result.classInfo) classes.push(result.classInfo)
+    else if (result.issue) issues.push(result.issue)
+  }
   return { classes, issues }
 }
 
@@ -492,7 +540,8 @@ export async function readTimetableFile(
 
   const extension = file.name.split(".").at(-1)?.toLocaleLowerCase()
   progress("Đang mở tệp...", 0)
-  let rows: string[][]
+  let rows: string[][] = []
+  let parsed: TimetableParseResult | null = null
 
   if (extension === "csv") {
     rows = parseCsv(await file.text())
@@ -500,13 +549,26 @@ export async function readTimetableFile(
     const ExcelJS = await import("exceljs")
     const workbook = new ExcelJS.Workbook()
     await workbook.xlsx.load(await file.arrayBuffer())
-    rows = []
+    const sheetResults: TimetableParseResult[] = []
     workbook.eachSheet((worksheet) => {
+      const sheetRows: string[][] = []
+      const columnCount = Math.max(
+        worksheet.columnCount,
+        worksheet.actualColumnCount,
+      )
       worksheet.eachRow({ includeEmpty: false }, (row) => {
-        const values = Array.isArray(row.values) ? row.values.slice(1) : []
-        rows.push(values.map(cellText))
+        const values = Array.from({ length: columnCount }, (_, index) => {
+          const cell = row.getCell(index + 1)
+          return cellText(cell.text) || cellText(cell.value)
+        })
+        sheetRows.push(values)
       })
+      if (sheetRows.length > 0) sheetResults.push(parseTimetableRows(sheetRows))
     })
+    parsed = {
+      classes: sheetResults.flatMap((result) => result.classes),
+      issues: sheetResults.flatMap((result) => result.issues),
+    }
   } else if (extension === "pdf") {
     rows = await pdfRows(file, progress)
   } else if (["png", "jpg", "jpeg", "webp", "bmp"].includes(extension ?? "")) {
@@ -517,7 +579,7 @@ export async function readTimetableFile(
   }
 
   progress("Đang phân tích các dòng thời khóa biểu...", 100)
-  const parsed = parseTimetableRows(rows)
+  parsed ??= parseTimetableRows(rows)
   if (parsed.classes.length === 0 && parsed.issues.length === 0) {
     throw new Error("Không tìm thấy dữ liệu trong tệp.")
   }

@@ -77,11 +77,26 @@ export async function PortalAuth({
   }
 
   if (!profile || profile.role !== role) {
+    const currentRole =
+      (["admin", "lecturer", "student"] as const).find(
+        (candidate) => candidate === profile?.role,
+      ) ?? null
     return (
       <AuthMessage
         title="Tài khoản không có quyền vào cổng này"
-        message={`Tài khoản hiện tại không được cấp quyền ${ROLE_LABELS[role]}. Hãy đăng xuất và chọn đúng cổng.`}
-        action={<SignOutButton />}
+        message={
+          currentRole
+            ? `Bạn đang đăng nhập bằng tài khoản ${ROLE_LABELS[currentRole]}, không phải ${ROLE_LABELS[role]}. Mỗi tài khoản chỉ được cấp một vai trò. Hãy đăng xuất để chuyển sang tài khoản ${ROLE_LABELS[role]}.`
+            : `Tài khoản chưa được cấp quyền ${ROLE_LABELS[role]}. Hãy đăng xuất và dùng tài khoản đã đăng ký cho cổng này.`
+        }
+        action={
+          <SignOutButton
+            redirectTo={`/${role}`}
+            label={`Làm mới cổng ${ROLE_LABELS[role]}`}
+            autoSignOut
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60"
+          />
+        }
       />
     )
   }

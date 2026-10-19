@@ -1,6 +1,17 @@
 export type IncidentSeverity = "critical" | "medium" | "low"
 export type IncidentStatus = "pending" | "in_progress" | "resolved"
 
+export type MaintenanceInvoice = {
+  invoiceNumber: string
+  vendor: string
+  maintenanceDate: string
+  description: string
+  quantity: number
+  unitPrice: number
+  laborCost: number
+  notes: string
+}
+
 export type EquipmentIncident = {
   id: string
   roomId: string
@@ -12,6 +23,7 @@ export type EquipmentIncident = {
   reportedAt: string
   reportedBy: string
   status: IncidentStatus
+  maintenanceInvoice?: MaintenanceInvoice
   photoDataUrl?: string
   isDemo?: boolean
 }
@@ -27,7 +39,15 @@ function isIncident(value: unknown): value is EquipmentIncident {
     typeof incident.equipmentName === "string" &&
     typeof incident.issueType === "string" &&
     (incident.severity === "critical" || incident.severity === "medium" || incident.severity === "low") &&
-    (incident.status === "pending" || incident.status === "in_progress" || incident.status === "resolved")
+    (incident.status === "pending" || incident.status === "in_progress" || incident.status === "resolved") &&
+    (incident.maintenanceInvoice === undefined ||
+      (typeof incident.maintenanceInvoice === "object" &&
+        typeof incident.maintenanceInvoice.invoiceNumber === "string" &&
+        typeof incident.maintenanceInvoice.vendor === "string" &&
+        typeof incident.maintenanceInvoice.description === "string" &&
+        Number.isFinite(incident.maintenanceInvoice.quantity) &&
+        Number.isFinite(incident.maintenanceInvoice.unitPrice) &&
+        Number.isFinite(incident.maintenanceInvoice.laborCost)))
 }
 
 export function loadIncidents(): EquipmentIncident[] {

@@ -10,7 +10,7 @@ import type { PortalRole } from "@/components/portal-auth"
 const PORTAL_INFO: Record<PortalRole, { title: string; subtitle: string }> = {
   admin: { title: "Cổng quản trị", subtitle: "Đăng nhập hoặc đăng ký bằng mã mời quản trị." },
   lecturer: { title: "Cổng giảng viên", subtitle: "Đăng nhập hoặc tạo tài khoản giảng viên." },
-  student: { title: "Cổng sinh viên", subtitle: "Đăng nhập hoặc tạo tài khoản sinh viên." },
+  student: { title: "Cổng sinh viên", subtitle: "Đăng nhập hoặc tạo tài khoản sinh viên bằng Gmail." },
 }
 
 function authErrorMessage(error: unknown): string {
@@ -57,6 +57,10 @@ export function AuthForm({ role }: { role: PortalRole }) {
     const password = String(formData.get("password") ?? "")
 
     try {
+      if (role === "student" && !/^[^\s@]+@gmail\.com$/.test(email)) {
+        throw new Error("Vui lòng nhập tài khoản Gmail có đuôi @gmail.com.")
+      }
+
       if (registering && role === "admin") {
         const response = await fetch("/api/auth/admin-signup", {
           method: "POST",
@@ -137,7 +141,9 @@ export function AuthForm({ role }: { role: PortalRole }) {
           <div>
             <h2 className="text-lg font-bold text-slate-900">{registering ? "Tạo tài khoản" : "Đăng nhập"}</h2>
             <p className="mt-1 text-sm text-slate-500">
-              {registering ? "Tài khoản được lưu an toàn trên Supabase." : "Dùng email và mật khẩu đã đăng ký."}
+              {registering
+                ? "Tài khoản được lưu an toàn trên Supabase."
+                : "Dùng email và mật khẩu đã đăng ký."}
             </p>
           </div>
 
@@ -146,8 +152,16 @@ export function AuthForm({ role }: { role: PortalRole }) {
               <input name="fullName" autoComplete="name" required maxLength={120} className={inputClass} />
             </Field>
           )}
-          <Field label="Email">
-            <input name="email" type="email" autoComplete="email" required maxLength={254} className={inputClass} />
+          <Field label={role === "student" ? "Tài khoản Gmail" : "Email"}>
+            <input
+              name="email"
+              type="email"
+              autoComplete="email"
+              required
+              maxLength={254}
+              placeholder={role === "student" ? "tenban@gmail.com" : undefined}
+              className={inputClass}
+            />
           </Field>
           <Field label="Mật khẩu">
             <div className="relative">
